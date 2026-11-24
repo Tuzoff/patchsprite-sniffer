@@ -401,9 +401,9 @@ test("an entry's source comes from the change and its evidence, never from an op
   assert.deepEqual(run(repairName("read-back", probeOk)).messages.nameReply.source, { kind: "read-back", ref: "probe getPreset at 2026-11-24T18:00:01Z" });
   const confirm = (entry: string, source: Change["source"], evidence: Evidence): Change => ({ id: `k-${entry.toLowerCase()}`, entry, action: "confirm", source, evidence: [evidence] });
   const confirmed = run(confirm("getName", "read-back", probeOk), confirm("getPreset", "read-back", probeOk));
-  assert.deepEqual(confirmed.messages.getName.source, { kind: "read-back", ref: "probe getPreset at 2026-11-24T18:00:01Z" }, "a confirm raises doc to read-back");
+  assert.deepEqual(confirmed.messages.getName.source, { kind: "read-back", ref: "probe getPreset at 2026-11-24T18:00:01Z, on 1.20" }, "a confirm raises doc to read-back, on the firmware it was seen on");
   assert.deepEqual(confirmed.messages.getPreset.source, { kind: "replay-verified" }, "a confirm never lowers it");
-  assert.deepEqual(run(confirm("getName", "player-confirmed", yes)).messages.getName.source, { kind: "player-confirmed", ref: "player at 2026-11-24T18:00:00Z" }, "a player's yes beats a document");
+  assert.deepEqual(run(confirm("getName", "player-confirmed", yes)).messages.getName.source, { kind: "player-confirmed", ref: "player at 2026-11-24T18:00:00Z, on 1.20" }, "a player's yes beats a document");
   assert.deepEqual(run(confirm("getPreset", "player-confirmed", yes)).messages.getPreset.source, { kind: "replay-verified" }, "and nothing stronger");
   const getName = { id: "r", entry: "getName", action: "repair" as const, source: "player-confirmed" as const, ops: [{ op: "add" as const, path: "/messages/getName/safeRead", value: true }], evidence: [yes] };
   assert.equal(run(getName).messages.getName.source.kind, "player-confirmed", "an edit replaces the source even with a weaker one");
@@ -434,6 +434,12 @@ test("an entry's source comes from the change and its evidence, never from an op
   assert.equal((applySeedPatch(base, sectionThenConfirm).map as typeof base).parameters.groups.amp.params.gain.source.kind, "doc");
   assert.equal((applySeedPatch(base, withChanges(confirmName)).map as typeof base).messages.getName.source.kind, "doc");
   assert.equal(run({ ...confirmName, entry: "getName/amp" }).messages.getName.source.kind, "doc");
+  // in the unit's own delta, the firmware goes without saying
+  const docDelta = structuredClone(base);
+  docDelta.firmwares = { "1.20": { messages: { getName: { ...base.messages.getName } } } };
+  const raised = applySeedPatch(docDelta, against(docDelta, confirmName)).map as typeof docDelta;
+  assert.deepEqual(raised.firmwares["1.20"].messages.getName.source, { kind: "read-back", ref: "probe getPreset at 2026-11-24T18:00:01Z" });
+  assert.equal(raised.messages.getName.source.kind, "doc");
   // a group's blocks are part of each of its parameters' claim: an edit of them gives every parameter the source, and a
   // confirm of a name that only reaches a parameter through that edit raises nothing
   const reblock: Change = { id: "a", entry: "parameters", action: "repair", source: "doc", ops: [{ op: "replace", path: "/parameters/groups/amp/blocks", value: ["amp", "drive"], was: fingerprint(["amp"]) }], evidence: [doc] };
