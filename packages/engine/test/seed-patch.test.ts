@@ -434,6 +434,11 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.equal(applySeedPatch(map, withChanges({ ...plainInBass, mode: "guitar" })).results[0].status, "marked");
   map.modes.use.bass.messages = { getPreset: "getPresetBass" };
   assert.match(applySeedPatch(map, withChanges({ ...plainInBass, entry: "getPreset", source: "read-back", evidence: [probeOk] })).results[0].why!, /getPresetBass stands in for getPreset/);
+  const bassConfirm = { ...confirm, mode: "bass" };
+  assert.match(applySeedPatch(map, withChanges(bassConfirm)).results[0].why!, /mode bass reads getPresetBass, not getPreset/);
+  map.modes.use.bass.layouts = { patch: "bassPatch" };
+  const layoutInBass: Change = { id: "c", entry: "layout/patch", action: "suspect", mode: "bass", evidence: [probeSilent] };
+  assert.match(applySeedPatch({ ...map, layouts: { patch: { fields: [] } } }, withChanges(layoutInBass)).results[0].why!, /bassPatch stands in for patch/);
   assert.equal(applySeedPatch(seed(), withChanges({ ...plainInBass, entry: "getPreset", source: "read-back", evidence: [probeOk] })).results[0].status, "marked", "a map without modes ignores a plain entry's mode");
 
   const modes: Change = { id: "c", entry: "modes", action: "repair", source: "wire", ops: [{ op: "replace", path: "/modes/use/bass/groups/amp", value: "amp", was: fingerprint("bass_amp") }], evidence: [capture] };

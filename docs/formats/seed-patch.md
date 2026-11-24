@@ -130,10 +130,13 @@ as the reviewer saw it:
 
 - an `@<mode>` entry needs a change seen in that mode, and a mode the map uses; it only marks, because an edit would
   change the message every mode shares on one mode's evidence. A fix goes to the message itself, or to the mode's
-  own entries (`modes`, `layout/<name>`, `enum/<name>`);
+  own entries (`modes`, `layout/<name>`, `enum/<name>`). It is `refused` when the mode stands another message in
+  for it, since that mode never reads it;
 - a grouped parameter (`param/<block>/<id>/<group>`) needs a mode whose `groups` stand that group in;
-- a plain entry seen in a mode where another entry stands in for it (`modes.use.<mode>.messages` or `.groups`) is
-  `refused`, since the evidence is about the stand-in;
+- a plain entry seen in a mode where another entry stands in for it (`modes.use.<mode>.messages`, `.layouts`,
+  `.enums`, `.constants`, or `.groups` for any group that lists the parameter's block) is `refused`, since the
+  evidence is about the stand-in. For a parameter this is on the safe side: it is refused even when the id sits only
+  in a group the mode keeps;
 - a mode the map doesn't use is `refused`, except on a plain entry when the map has no `modes` at all: there the
   mode changes nothing the entry means, so it is ignored.
 

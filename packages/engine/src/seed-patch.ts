@@ -742,12 +742,18 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   const modeOf = (m: string | undefined) =>
     m !== undefined && isObject(use) && Object.hasOwn(use, m) && isObject(use[m]) ? (use[m] as Record<string, Json>) : undefined;
   // the entry that stands in for `name` in a mode's `messages` or `groups`; one mapped to itself doesn't
-  const standsIn = (u: Record<string, Json>, kind: "messages" | "groups", name: string) => {
+  const standsIn = (u: Record<string, Json>, kind: "messages" | "layouts" | "enums" | "constants" | "groups", name: string) => {
     const t = u[kind];
     const v = isObject(t) && Object.hasOwn(t, name) ? t[name] : undefined;
     return typeof v === "string" && v !== name ? v : undefined;
   };
-  if (e?.kind === "message" && e.mode !== undefined) return modeOf(e.mode) ? null : `the map has no mode ${e.mode}`;
+  if (e?.kind === "message" && e.mode !== undefined) {
+    const u = modeOf(e.mode);
+    if (!u) return `the map has no mode ${e.mode}`;
+    // a mode that stands another message in never reads this one
+    const s = standsIn(u, "messages", e.message);
+    return s === undefined ? null : `mode ${e.mode} reads ${s}, not ${e.message}; name that entry`;
+  }
   if (e?.kind === "param" && e.group !== undefined) {
     const u = modeOf(mode);
     if (!u) return `a parameter of the stand-in group ${e.group} needs the mode it was seen in, one the map uses`;
@@ -757,9 +763,12 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   if (mode === undefined || !e) return null;
   const u = modeOf(mode);
   if (!u) return isObject(use) ? `the map has no mode ${mode}` : null;
-  if (e.kind === "message") {
-    const s = standsIn(u, "messages", e.message);
-    return s === undefined ? null : `in mode ${mode}, ${s} stands in for ${e.message}`;
+  // a mode's own message, layout, enum or constant stands in for the shared one: the evidence is about that one
+  const KINDS = { message: "messages", layout: "layouts", enum: "enums", constant: "constants" } as const;
+  if (e.kind === "message" || e.kind === "layout" || e.kind === "enum" || e.kind === "constant") {
+    const name = e.kind === "message" ? e.message : e.name;
+    const s = standsIn(u, KINDS[e.kind], name);
+    return s === undefined ? null : `in mode ${mode}, ${s} stands in for ${name}`;
   }
   if (e.kind !== "param") return null;
   const groups = at(doc, ["parameters", "groups"]);
