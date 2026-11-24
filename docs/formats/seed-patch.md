@@ -233,8 +233,10 @@ value's own `source` is not an entry's and may be written.
 `applySeedPatch` gives the entry its source itself, on a message, a parameter or a choice (the entries the map keeps
 one on), in the unit's firmware delta when the delta has the entry, else in the base:
 
-- `kind` is the change's `source`, and `ref` says what the evidence that backs it was read from: a document's
-  citation, the probe's request and time, the player's answer time, or the capture's id in `files` with its hash.
+- `kind` is the change's `source`, and `ref` says what the first piece of evidence that backs it was read from: a
+  document's citation, the probe's request and time, the file's id in `files` with the first 16 digits of its hash
+  (a capture, or a replay or device list that names a file), else the evidence's kind and time; at most 512
+  characters.
 - An `add` or `repair` replaces the old source, which backed the claim as it was, even with a weaker one. A `confirm`
   only raises it, in the ranking above, never lowers it; the entry's bytes and fingerprint don't change, since the map
   leaves `source` out of the fingerprint.

@@ -388,12 +388,12 @@ const backs: Record<Source, (e: Evidence) => boolean> = {
 const SOURCE_HOMES = [["messages", "*"], ["parameters", "groups", "*", "params", "*"], ["choices", "*"]] as const;
 const SOURCE_KEYS = SOURCE_HOMES.flatMap((h) => [[...h, "source"], ["firmwares", "*", ...h, "source"]]);
 
-/** A value holds something at `pat` (`*` is any key). */
+/** A value holds something at `pat` (`*` is any key or array item, as a path's `*` matches an index too). */
 const holdsAt = (v: unknown, pat: readonly string[]): boolean => {
   if (!pat.length) return true;
   const [k, ...rest] = pat;
-  if (!isObject(v)) return false;
-  return k === "*" ? Object.values(v).some((x) => holdsAt(x, rest)) : Object.hasOwn(v, k) && holdsAt(v[k], rest);
+  if (v === null || typeof v !== "object") return false;
+  return k === "*" ? Object.values(v).some((x) => holdsAt(x, rest)) : isObject(v) && Object.hasOwn(v, k) && holdsAt(v[k], rest);
 };
 
 /** An op at `segs` that puts `value` there writes an entry's `source`: it is at or under one, or its value holds one. */
@@ -946,13 +946,12 @@ const SOURCE_RANK = ["doc", "player-confirmed", "wire", "device-reported", "read
 function sourceRef(p: SeedPatch, c: Change): string | undefined {
   const e = c.source ? c.evidence.find(backs[c.source]) : undefined;
   if (!e) return undefined;
-  const sha = "file" in e && e.file !== undefined ? p.files?.[e.file]?.sha256 : undefined;
-  const file = "file" in e && e.file !== undefined ? `${e.file}${sha ? ` sha256:${sha.slice(0, 16)}` : ""}` : undefined;
+  const file = "file" in e ? e.file : undefined;
+  const sha = file !== undefined && p.files && Object.hasOwn(p.files, file) ? p.files[file].sha256 : undefined;
   const ref =
     e.kind === "doc" ? e.citation
     : e.kind === "probe" ? `probe ${e.request} at ${e.at}`
-    : e.kind === "read-back" || e.kind === "map-check" ? `${e.kind} at ${e.at}`
-    : file !== undefined ? `${e.kind} ${file}`
+    : file !== undefined ? `${e.kind} ${file}${sha ? ` sha256:${sha.slice(0, 16)}` : ""}`
     : "at" in e ? `${e.kind} at ${e.at}` : undefined;
   return ref?.slice(0, 512);
 }
@@ -963,13 +962,13 @@ function sourceRef(p: SeedPatch, c: Change): string | undefined {
  * An edit's source replaces the old one, which backed the claim as it was; a confirm only raises it.
  */
 function giveSource(doc: Json, p: SeedPatch, c: Change, paths: string[][]): void {
+  const kind = c.source;
+  if (kind === undefined) return;
   const homes = paths.filter((h) => {
     const own = h[0] === "firmwares" ? h.slice(2) : h;
     return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
   });
   const delta = homes.filter((h) => h[0] === "firmwares");
-  const kind = c.source;
-  if (kind === undefined) return;
   const ref = sourceRef(p, c);
   for (const h of delta.length ? delta : homes) {
     const entry = at(doc, h);

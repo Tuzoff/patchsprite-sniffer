@@ -135,7 +135,7 @@ test("the schema refuses what a patch may not hold", () => {
   assert.ok(refused((x) => (x.unit.port = "MIDI 2")), "no port names, paths or people");
   assert.ok(refused((x) => (x.changes[0].evidence[0].sent = "F0 7D")), "bytes are lowercase hex");
   assert.ok(refused((x) => (x.changes[0].entry = "get-preset")));
-  assert.ok(refused((x) => (x.changes[0].source = "test")), "test provenance is for the app's own test maps");
+  assert.ok(refused((x) => (x.changes[0].source = "test")), "the test source kind is for the app's own hardware-check runs");
   assert.ok(refused((x) => (x.changes[2].ops[0].was = undefined)), "a replace says what it replaces");
   assert.ok(refused((x) => (x.changes[2].ops[0].path = "/")), "never the whole map");
   assert.ok(refused((x) => (x.changes = [])));
@@ -382,6 +382,7 @@ test("an entry's source comes from the change and its evidence, never from an op
   assert.ok(refuses({ ...edit("/messages/getName", {}), ops: [{ op: "replace", path: "/messages/getName", value: { cmd: "30", dir: "request", source: { kind: "test" } }, was: fingerprint(seed().messages.getName) }] }));
   assert.ok(refuses({ ...edit("/firmwares/1.20/messages/getName", { cmd: "30", dir: "request", source: { kind: "doc" } }) }));
   assert.ok(refuses({ ...edit("/parameters/groups/amp/params/gain/source", { kind: "doc" }), entry: "param/amp/1" }));
+  assert.ok(refuses({ ...edit("/parameters/groups", { amp: { params: [{ source: { kind: "test" } }] } }), entry: "parameters" }), "an array in the value hides none");
   // a measured value's own source is not an entry's
   const timing = { value: 120, unit: "ms", measuredOn: "1.20", date: "2026-11-24", source: "probe" };
   assert.ok(!refuses({ id: "m", entry: "measured/transport.timing.replyTimeoutMs", action: "repair", source: "read-back", ops: [{ op: "replace", path: "/transport/timing/replyTimeoutMs", value: timing, was: fingerprint(300) }], evidence: [probeOk] }));
