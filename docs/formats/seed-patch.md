@@ -36,7 +36,7 @@ One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key
 | `unit.usb` | no | `{vid, pid}` |
 | `producer` | yes | `{tool, version}`, where `tool` is `sniffer`, `app`, `cloud` or `manual` |
 | `createdAt` | yes | ISO 8601 time with offset |
-| `sources` | no | files the evidence points into, by id: `{kind, sha256?, note?}`, `kind` one of `capture`, `probe-log`, `map-checks`, `doc` |
+| `files` | no | files the evidence points into, by id: `{kind, sha256?, note?}`, `kind` one of `capture`, `probe-log`, `map-checks`, `doc` |
 | `changes` | yes | 1 to 4,096 changes |
 
 A patch names a unit by model and firmware only. It holds no person, machine, file path, MIDI port name or serial
@@ -164,17 +164,17 @@ another. Appends to one array (`-`) are each a new place, so two changes may bot
 
 | Kind | Keys | Is |
 | --- | --- | --- |
-| `capture` | `source`, `action?`, `label?`, `records?`, `frames?` | traffic the sniffer recorded between the vendor editor and the unit: the labelled step, record numbers in the capture file (from 0), and the frames copied (`{dir, bytes}`, `dir` `out` to the device, `in` from it) so the change can be reviewed without the capture |
+| `capture` | `file`, `action?`, `label?`, `records?`, `frames?` | traffic the sniffer recorded between the vendor editor and the unit: the labelled step, record numbers in the capture file (from 0), and the frames copied (`{dir, bytes}`, `dir` `out` to the device, `in` from it) so the change can be reviewed without the capture |
 | `probe` | `at`, `request`, `sent`, `replies`, `result`, `detail?` | a read-only request sent once on first contact; `result` is `shape-ok` (decoded as the seed says), `mismatch` (answered, but not as the seed says) or `silent` (no answer in time); `detail` is the decoder's difference ("cmd 31 has 16 name bytes; the seed says 12") |
 | `read-back` | `at`, `sent`, `readBack`, `result`, `echo`, `detail?` | a write, then a read of the same value; `result` `match` or `differs`; `echo` when the write sent back the value its paired read had just returned, so the sound didn't change |
-| `replay` | `at`, `result`, `source?`, `detail?` | the rebuilt entry replayed on the unit (sniffer spec S18, verify before it goes live) |
-| `device-list` | `at`, `request`, `replies`, `source?` | a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) |
+| `replay` | `at`, `result`, `file?`, `detail?` | the rebuilt entry replayed on the unit (sniffer spec S18, verify before it goes live) |
+| `device-list` | `at`, `request`, `replies`, `file?` | a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) |
 | `player` | `at`, `question`, `answer` | the player's answer where nothing can be read back ("Did the unit switch to preset 12?"), `yes`, `no` or `unsure` |
 | `freeze` | `at`, `sent`, `errorText?`, `recovery` | the unit stopped answering after a send; `recovery` `power-cycle`, `replug` or `none` |
 | `map-check` | `at`, `fp`, `outcome`, `claimed?`, `observed?`, `why?` | a line of the app's map-check log, less what the patch already says (map, firmware, entry) |
 | `doc` | `citation`, `quote?` | a vendor or third-party document; the weakest evidence |
 
-A `source` names an entry of the patch's `sources`.
+A `file` names an entry of the patch's `files`.
 
 **Who may be probed.** The app's probe runner decides which requests first contact sends to an unknown unit, never
 the patch: only messages whose `dir` is `request`, whose command appears in a list the unit reported or in the
@@ -203,9 +203,14 @@ no more trust than its evidence shows.
 | `player-confirmed` | a player's `yes` |
 | `doc` | a `doc` |
 
-These are the map's source kinds (`source.kind`, device-map-protocol.md) plus `player-confirmed`, which is new here,
-from the first-contact design, and gives the map no source (see Applying a patch). The map's `test` kind is for the
+These are the map's source kinds (`source.kind`, device-map-protocol.md). The map ranks them, weakest first: `doc`,
+`player-confirmed`, `wire`, `device-reported`, `read-back`, `replay-verified`, `test`. A player's yes beats a document,
+since it was seen on a real unit, but doesn't check bytes the way a capture does. The map's `test` kind is for the
 app's own hardware-check runs and never appears in a patch.
+
+In a patch, "source" means only this: the kind a change gives its entry, which becomes the entry's `source.kind`. The
+files evidence points into are `files`. A measured value's `source` (how a number was measured) is a different object
+of the map's.
 
 ## Applying a patch
 
@@ -229,12 +234,10 @@ value's own `source` is not an entry's and may be written.
 one on), in the unit's firmware delta when the delta has the entry, else in the base:
 
 - `kind` is the change's `source`, and `ref` says what the evidence that backs it was read from: a document's
-  citation, the probe's request and time, or the capture's id in `sources` with its hash.
-- An `add` or `repair` replaces the old source, which backed the claim as it was. A `confirm` only raises it
-  (`doc` < `wire` < `device-reported` < `read-back` < `replay-verified`), never lowers it; the entry's bytes and
-  fingerprint don't change, since the map leaves `source` out of the fingerprint.
-- `player-confirmed` is the unit's own trust level, which the app keeps outside the map, so it gives no source, and
-  an edit backed only by a player's yes drops the old one.
+  citation, the probe's request and time, the player's answer time, or the capture's id in `files` with its hash.
+- An `add` or `repair` replaces the old source, which backed the claim as it was, even with a weaker one. A `confirm`
+  only raises it, in the ranking above, never lowers it; the entry's bytes and fingerprint don't change, since the map
+  leaves `source` out of the fingerprint.
 
 A draft's top-level `provenance` stays its own bookkeeping; folding it into per-entry sources is the map's move, not a
 patch's.

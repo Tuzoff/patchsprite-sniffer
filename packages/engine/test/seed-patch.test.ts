@@ -21,7 +21,7 @@ const messages = (p: SeedPatch) => {
 
 const probeOk: Evidence = { kind: "probe", at: "2026-11-24T18:00:01Z", request: "getPreset", sent: "f0 7d 01 10 f7", replies: ["f0 7d 01 11 05 f7"], result: "shape-ok" };
 const probeSilent: Evidence = { ...probeOk, replies: [], result: "silent" };
-const capture: Evidence = { kind: "capture", source: "walk-1", records: [1] };
+const capture: Evidence = { kind: "capture", file: "walk-1", records: [1] };
 
 test("the example patch parses, applies change by change and leaves the seed untouched", () => {
   const map = seed();
@@ -120,7 +120,7 @@ test("a change claims no more trust than its evidence shows", () => {
   assert.ok(messages(withChanges({ id: "c", entry: "factoryReset", action: "block", evidence: [probeSilent] })).some((m) => /freeze or a document/.test(m)));
   const freeze: Evidence = { kind: "freeze", at: "2026-11-24T18:00:00Z", sent: "f0 7d 01 7f f7", recovery: "power-cycle" };
   assert.deepEqual(messages(withChanges({ id: "c", entry: "factoryReset", action: "block", evidence: [freeze] })), []);
-  assert.ok(messages(withChanges({ id: "c", entry: "getPreset", action: "suspect", evidence: [{ kind: "capture", source: "nope" }, probeSilent] })).some((m) => /no source "nope"/.test(m)));
+  assert.ok(messages(withChanges({ id: "c", entry: "getPreset", action: "suspect", evidence: [{ kind: "capture", file: "nope" }, probeSilent] })).some((m) => /no file "nope"/.test(m)));
 });
 
 test("the schema refuses what a patch may not hold", () => {
@@ -400,9 +400,10 @@ test("an entry's source comes from the change and its evidence, never from an op
   const confirmed = run(confirm("getName", "read-back", probeOk), confirm("getPreset", "read-back", probeOk));
   assert.deepEqual(confirmed.messages.getName.source, { kind: "read-back", ref: "probe getPreset at 2026-11-24T18:00:01Z" }, "a confirm raises doc to read-back");
   assert.deepEqual(confirmed.messages.getPreset.source, { kind: "replay-verified" }, "a confirm never lowers it");
-  assert.deepEqual(run(confirm("getName", "player-confirmed", yes)).messages.getName.source, { kind: "doc", ref: "Manual p. 3" }, "a player's yes is the unit's, not the map's");
+  assert.deepEqual(run(confirm("getName", "player-confirmed", yes)).messages.getName.source, { kind: "player-confirmed", ref: "player at 2026-11-24T18:00:00Z" }, "a player's yes beats a document");
+  assert.deepEqual(run(confirm("getPreset", "player-confirmed", yes)).messages.getPreset.source, { kind: "replay-verified" }, "and nothing stronger");
   const getName = { id: "r", entry: "getName", action: "repair" as const, source: "player-confirmed" as const, ops: [{ op: "add" as const, path: "/messages/getName/safeRead", value: true }], evidence: [yes] };
-  assert.equal(run(getName).messages.getName.source, undefined, "an edit backed only by a player's yes drops the old source");
+  assert.equal(run(getName).messages.getName.source.kind, "player-confirmed", "an edit replaces the source even with a weaker one");
   // a parameter carries one too
   const gain: Change = { id: "g", entry: "param/amp/1", action: "repair", source: "wire", ops: [{ op: "add", path: "/parameters/groups/amp/params/gain/max", value: 10 }], evidence: [capture] };
   assert.equal(run(gain).parameters.groups.amp.params.gain.source.kind, "wire");
