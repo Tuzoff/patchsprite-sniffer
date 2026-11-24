@@ -58,7 +58,7 @@ const RESERVED_TOP = new Set<string>([...FINE_SECTIONS, ...BOOKKEEPING]);
  * Words that never name a message, since they name a section or start another kind of entry (parseEntry never reads
  * them as one). A map's messages also never share a name with any of its own top-level keys.
  */
-export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...RESERVED_TOP, ...NAMED_KINDS, "param", "setting", "measured"];
+export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...RESERVED_TOP, ...NAMED_KINDS, "param", "setting", "measured", "linked"];
 
 export type Entry =
   /** a message, or a top-level section this engine doesn't know by that name, whichever the map has */
@@ -66,6 +66,8 @@ export type Entry =
   /** a measured value, by its dotted path (`transport.timing.compareToggle`) */
   | { kind: "measured"; field: string }
   | { kind: "param"; block: string; id: number }
+  /** a set of paired parameters in a parameter group (`linked/<group>/<set>`) */
+  | { kind: "linked"; group: string; set: string }
   | { kind: "setting"; id: string }
   | { kind: (typeof NAMED_KINDS)[number]; name: string }
   | { kind: "section"; section: (typeof SECTION_ENTRIES)[number] };
@@ -85,6 +87,7 @@ export function parseEntry(entry: string): Entry | null {
   // never in a section only finer entries cover (another firmware's delta, a message) or in a draft's bookkeeping
   if (head === "measured")
     return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) && (SECTION_ENTRIES as readonly string[]).includes(a.split(".")[0]) ? { kind: "measured", field: a } : null;
+  if (head === "linked") return parts.length === 3 && KEY_RE.test(a) && KEY_RE.test(b) && a.length <= 64 && b.length <= 64 ? { kind: "linked", group: a, set: b } : null;
   if (RESERVED_TOP.has(head)) return null;
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
@@ -109,6 +112,8 @@ export function entryHomes(e: Entry): string[][] {
       return [["messages", e.message], ["firmwares", FW, "messages", e.message], ...(e.block === undefined ? [[e.message]] : [])];
     case "measured":
       return [e.field.split(".")];
+    case "linked":
+      return [["parameters", "groups", e.group, "linked", e.set]];
     case "param":
       return [["parameters", "groups", "*", "params", "*"]];
     case "setting":
@@ -459,7 +464,7 @@ const formatPath = (path: readonly PropertyKey[]) => path.map((k, i) => (typeof 
 const SAFETY_KEYS = new Set(["safety", "blocked", "hazards"]);
 /** Top-level keys whose risks the reasons below know; a change to any other section can't be judged, so it's reviewed. */
 const KNOWN_TOP = new Set<string>([...SECTION_ENTRIES, ...FINE_SECTIONS]);
-const WRITE_RANGE_KEYS = new Set(["allowed", "writable", "min", "max", "saturate", "readOnly"]);
+const WRITE_RANGE_KEYS = new Set(["allowed", "writable", "min", "max", "saturate", "readOnly", "linked"]);
 /** Keys that decide what first contact sends to an unknown unit and whether a write counts as verified. */
 const PROBE_KEYS = new Set(["safeRead", "readBack"]);
 /** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */

@@ -370,3 +370,13 @@ test("a measured value skips the framing review only when it is a measured value
   assert.deepEqual(reasons(header), ["changes the framing of every message"], "replacing framing with a measured shape still takes the framing out");
   assert.equal(parseEntry("measured/draftThing.x"), null, "a measured value lies in a known section");
 });
+
+test("a linked parameter set is an entry in its group", () => {
+  assert.deepEqual(parseEntry("linked/amp/gain_pair"), { kind: "linked", group: "amp", set: "gain_pair" });
+  for (const bad of ["linked", "linked/amp", "linked/Amp/x", "linked/amp/x/y"]) assert.equal(parseEntry(bad), null, bad);
+  const add: Change = { id: "c", entry: "linked/amp/gain_pair", action: "add", source: "wire", ops: [{ op: "add", path: "/parameters/groups/amp/linked/gain_pair", value: { params: ["gain", "level"] } }], evidence: [capture] };
+  assert.deepEqual(messages(withChanges(add)), []);
+  assert.equal(applySeedPatch(seed(), withChanges(add)).results[0].status, "applied");
+  assert.match(messages(withChanges({ ...add, ops: [{ op: "add", path: "/parameters/groups/drive/linked/gain_pair", value: {} }] }))[0], /outside entry/);
+  assert.deepEqual(reviewReasons(withChanges(add), seed()).map((r) => r.reason), ["changes what may be written"], "a linked set limits the values written together");
+});

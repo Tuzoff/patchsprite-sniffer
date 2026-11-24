@@ -88,6 +88,7 @@ map-check record about the same entry use the same name.
 | `constant/<name>` | a named constant | `/constants/<name>`, `/firmwares/<fw>/constants/<name>` |
 | `control/<name>` | a MIDI channel control | `/controls/items/<name>` |
 | `setting/<id>` | a global setting | `/settings/items/*` |
+| `linked/<group>/<set>` | a set of paired parameters in a parameter group | `/parameters/groups/<group>/linked/<set>` |
 | `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), inside one of the known sections in the next row | the field's own path (`/transport/timing/compareToggle`) |
 | `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
@@ -104,7 +105,7 @@ say which blocks it serves, and the whole `controls` section covers the channel 
 `controls.items`.
 
 A bare name is a message or, when the map has a top-level key of that name, that section. So no message is named
-like a section or a word that starts another kind of entry (`param`, `setting`, `measured`, `choice`, `layout`,
+like a section or a word that starts another kind of entry (`param`, `setting`, `measured`, `linked`, `choice`, `layout`,
 `enum`, `constant`, `control`), nor like any top-level key of its own map; when a map breaks that, a change naming
 it is `refused` as ambiguous, and so is a change whose ops would make a map break it. A change to a top-level section this engine doesn't know always needs review.
 
@@ -210,7 +211,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - a `replace` or `remove` whose `was` isn't the base map's value at its path (an earlier op moved an array's items, or
   the patch was made against another map), since then what it takes out isn't known;
 - `safety`, `blocked` or `hazards`;
-- what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`;
+- what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
+  limit the values written together;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
   fingerprint, so only review catches them);
 - the framing (`/transport` and `/addresses`), which every message depends on; a `measured/...` change in them is exempt
