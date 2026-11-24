@@ -737,14 +737,17 @@ function unsafeProbe(messages: Record<string, Json>, c: Change): string | null {
  * stands in for it is evidence about the stand-in, not about it.
  */
 function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: string | undefined): string | null {
-  const modeOf = (m: string) => (isObject(use) && Object.hasOwn(use, m) && isObject(use[m]) ? (use[m] as Record<string, Json>) : undefined);
-  const standsIn = (u: Record<string, Json> | undefined, kind: string, name: string) => {
-    const t = u?.[kind];
-    return isObject(t) && Object.hasOwn(t, name) && t[name] !== name ? t[name] : undefined;
+  const modeOf = (m: string | undefined) =>
+    m !== undefined && isObject(use) && Object.hasOwn(use, m) && isObject(use[m]) ? (use[m] as Record<string, Json>) : undefined;
+  // the entry that stands in for `name` in a mode's `messages` or `groups`; one mapped to itself doesn't
+  const standsIn = (u: Record<string, Json>, kind: "messages" | "groups", name: string) => {
+    const t = u[kind];
+    const v = isObject(t) && Object.hasOwn(t, name) ? t[name] : undefined;
+    return v !== undefined && v !== name ? String(v) : undefined;
   };
   if (e?.kind === "message" && e.mode !== undefined) return modeOf(e.mode) ? null : `the map has no mode ${e.mode}`;
   if (e?.kind === "param" && e.group !== undefined) {
-    const u = mode === undefined ? undefined : modeOf(mode);
+    const u = modeOf(mode);
     if (!u) return `a parameter of the stand-in group ${e.group} needs the mode it was seen in, one the map uses`;
     const g = u.groups;
     return isObject(g) && Object.values(g).includes(e.group) ? null : `group ${e.group} stands in for none in mode ${mode}`;
@@ -752,14 +755,17 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   if (mode === undefined || !e) return null;
   const u = modeOf(mode);
   if (!u) return isObject(use) ? `the map has no mode ${mode}` : null;
-  if (e.kind === "message" && standsIn(u, "messages", e.message) !== undefined) return `in mode ${mode}, ${String(standsIn(u, "messages", e.message))} stands in for ${e.message}`;
-  if (e.kind === "param") {
-    const groups = at(doc, ["parameters", "groups"]);
-    if (isObject(groups))
-      for (const [g, grp] of Object.entries(groups))
-        if (isObject(grp) && Array.isArray(grp.blocks) && grp.blocks.includes(e.block) && standsIn(u, "groups", g) !== undefined)
-          return `in mode ${mode}, ${String(standsIn(u, "groups", g))} stands in for group ${g}`;
+  if (e.kind === "message") {
+    const s = standsIn(u, "messages", e.message);
+    return s === undefined ? null : `in mode ${mode}, ${s} stands in for ${e.message}`;
   }
+  if (e.kind !== "param") return null;
+  const groups = at(doc, ["parameters", "groups"]);
+  if (isObject(groups))
+    for (const [g, grp] of Object.entries(groups)) {
+      const s = standsIn(u, "groups", g);
+      if (s !== undefined && isObject(grp) && Array.isArray(grp.blocks) && grp.blocks.includes(e.block)) return `in mode ${mode}, ${s} stands in for group ${g}`;
+    }
   return null;
 }
 
