@@ -242,6 +242,41 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("setPreset", { op: "add", path: "/messages/setPreset/readBack", value: { message: "getPreset" } })), ["changes what is probed or what verifies a write"]);
 });
 
+test("a change that could lift a block goes to review: the pins that tell a blocked message from a send on its cmd", () => {
+  // factoryReset is blocked; storeScene shares its cmd and is told apart by a const; getScene can produce any cmd
+  const pin = (v: number) => ({ fields: [{ name: "magic", type: "u8", const: v }] });
+  const base = seed();
+  Object.assign(base.messages, {
+    factoryReset: { cmd: "7f", dir: "send", payload: pin(1) },
+    storeScene: { cmd: "7f", dir: "send", payload: "scene" },
+    getScene: { cmd: "{n}", dir: "request", payload: pin(3) },
+  });
+  base.layouts = { scene: { size: 2, fields: [{ name: "magic", type: "u8", const: 2 }, { name: "slot", type: "u8" }] } };
+  base.blocked = ["factoryReset"];
+  base.firmwares = { "1.20": {} };
+  const LIFT = "may lift a block: changes what tells a blocked message from a send on its cmd";
+  const edit = (entry: string, ...ops: NonNullable<Change["ops"]>): Change => ({ id: `c-${entry}`, entry, action: "repair", source: "wire", ops, evidence: [capture] });
+  const reasons = (...changes: Change[]) => reviewReasons(withChanges(...changes), base).map((r) => `${r.change}: ${r.reason}`);
+
+  // the blocked message's own pin, a sharer's pin, the layout a sharer names, a templated request, a firmware's delta
+  assert.deepEqual(reasons(edit("factoryReset", { op: "replace", path: "/messages/factoryReset/payload/fields/0/const", value: 2, was: fingerprint(1) })), [`c-factoryReset: ${LIFT}`]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "replace", path: "/messages/storeScene/payload", value: pin(1), was: fingerprint("scene") })), [`c-storeScene: ${LIFT}`]);
+  assert.deepEqual(reasons(edit("layout/scene", { op: "add", path: "/layouts/scene/maxSize", value: 4 })), [`c-layout/scene: ${LIFT}`]);
+  assert.deepEqual(reasons(edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 1, was: fingerprint(2) })), [`c-layout/scene: ${LIFT}`]);
+  assert.deepEqual(reasons(edit("getScene", { op: "remove", path: "/messages/getScene/payload/fields/0/const", was: fingerprint(3) })), [`c-getScene: ${LIFT}`]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "add", path: "/firmwares/1.20/messages/storeScene", value: { cmd: "7f", dir: "send" } })), [`c-storeScene: ${LIFT}`, "c-storeScene: adds something that writes to the unit"]);
+
+  // a send moved onto the blocked cmd, and a block put on a send whose payload another change edits
+  assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "7f", was: fingerprint("22") })), [`c-setBypass: ${LIFT}`]);
+  const block: Change = { ...edit("blocked", { op: "add", path: "/firmwares/1.20/blocked", value: ["setPreset"] }) };
+  const rename = edit("setPreset", { op: "replace", path: "/messages/setPreset/payload/fields/0/name", value: "slot", was: fingerprint("preset") });
+  assert.deepEqual(reasons(block, rename), ["c-blocked: changes safety rules, blocked lists or hazards", `c-setPreset: ${LIFT}`]);
+
+  // away from the block's cmd, a payload or cmd repair is still not a review reason
+  assert.deepEqual(reasons(rename), []);
+  assert.deepEqual(reasons(edit("nameReply", { op: "replace", path: "/messages/nameReply/cmd", value: "32", was: fingerprint("31") })), []);
+});
+
 test("ops never write provenance or a draft's bookkeeping", () => {
   const op = (path: string, value: string | number | Record<string, string> = 1): Change => ({ id: "c", entry: "nameReply", action: "repair", source: "wire", ops: [{ op: "add", path, value }], evidence: [capture] });
   assert.ok(messages(withChanges(op("/messages/nameReply/provenance", "replay-verified"))).some((m) => /never write them/.test(m)));

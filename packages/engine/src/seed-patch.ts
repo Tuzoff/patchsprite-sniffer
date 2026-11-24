@@ -495,6 +495,73 @@ const PROBE_KEYS = new Set(["safeRead", "readBack"]);
 /** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */
 const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb", "lsb", "channel", "bits"]);
 
+/** Keys of a message that decide which bytes it sends: its cmd, its direction and its payload (inline or a layout's name). */
+const PIN_KEYS = ["cmd", "dir", "payload"];
+
+/** Two cmds can be the same bytes: as long, and each token the same or a `{placeholder}` on either side (the app's rule). */
+function cmdsOverlap(a: string, b: string): boolean {
+  const x = a.toLowerCase().split(" ");
+  const y = b.toLowerCase().split(" ");
+  return x.length === y.length && x.every((t, i) => t.startsWith("{") || y[i].startsWith("{") || t === y[i]);
+}
+
+const SEP = "\u0000";
+
+/**
+ * Where a change may lift a block, as joined paths. A block is per message: the app lets a send share a blocked
+ * message's cmd only while their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them
+ * apart, so those pins are what keep the block standing. For the base map and each firmware's view of it, this is the
+ * `cmd`, `dir` and `payload` of every blocked message and of every send or request whose cmd can be a blocked one's,
+ * and the layouts their payloads name. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
+ */
+function blockPins(map: Json): Set<string> {
+  const out = new Set<string>();
+  const firmwares = at(map, ["firmwares"]);
+  const layoutsOf = (fw?: string) => {
+    const base = at(map, ["layouts"]);
+    const delta = fw === undefined ? undefined : at(map, ["firmwares", fw, "layouts"]);
+    return { ...(isObject(base) ? base : {}), ...(isObject(delta) ? delta : {}) };
+  };
+  const blockedOf = (fw?: string) =>
+    [at(map, ["blocked"]), fw === undefined ? undefined : at(map, ["firmwares", fw, "blocked"])].flatMap((b) => (Array.isArray(b) ? b.filter((x) => typeof x === "string") : []));
+  for (const fw of [undefined, ...(isObject(firmwares) ? Object.keys(firmwares) : [])]) {
+    const messages = messagesFor(map, fw);
+    const blocked = new Set(blockedOf(fw).filter((b) => Object.hasOwn(messages, b)));
+    if (!blocked.size) continue;
+    const cmds = [...blocked].flatMap((b) => {
+      const m = messages[b];
+      return isObject(m) && typeof m.cmd === "string" ? [m.cmd] : [];
+    });
+    const layouts = layoutsOf(fw);
+    for (const [n, m] of Object.entries(messages)) {
+      if (!isObject(m)) continue;
+      const shares = (m.dir === "send" || m.dir === "request") && typeof m.cmd === "string" && cmds.some((c) => cmdsOverlap(m.cmd as string, c));
+      if (!blocked.has(n) && !shares) continue;
+      for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
+      if (typeof m.payload === "string" && Object.hasOwn(layouts, m.payload)) out.add(["layouts", m.payload].join(SEP));
+    }
+  }
+  return out;
+}
+
+/** The paths above the pins: a whole message, a section. */
+function abovePins(pins: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const pin of pins) {
+    const segs = pin.split(SEP);
+    for (let i = 1; i < segs.length; i++) out.add(segs.slice(0, i).join(SEP));
+  }
+  return out;
+}
+
+/** An op at `segs` writes a block's pin: at or under one, or above one (a whole message, section or firmware delta). */
+function writesPin(segs: readonly string[], pins: Set<string>, above: Set<string>): boolean {
+  if (segs[0] === "firmwares" && segs.length <= 2) return pins.size > 0;
+  const own = segs[0] === "firmwares" ? segs.slice(2) : segs;
+  for (let i = 1; i <= own.length; i++) if (pins.has(own.slice(0, i).join(SEP))) return true;
+  return above.has(own.join(SEP));
+}
+
 /** Keys anywhere inside a value. */
 function keysIn(v: unknown, out = new Set<string>()): Set<string> {
   if (Array.isArray(v)) for (const x of v) keysIn(x, out);
@@ -524,6 +591,10 @@ const isMeasured = (v: unknown): boolean =>
 
 export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
+  // the pins as the base map has them and as the whole patch leaves them, so a change that brings a send onto a
+  // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place
+  const pins = new Set([...blockPins(base as Json), ...blockPins(applySeedPatch(base, p).map as Json)]);
+  const above = abovePins(pins);
   for (const c of p.changes) {
     const reasons = new Set<string>();
     const measured = parseEntry(c.entry)?.kind === "measured";
@@ -540,6 +611,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const keys = new Set([...segs, ...put, ...keysIn(old), ...keysIn(covered)]);
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
+      if (writesPin(segs, pins, above)) reasons.add("may lift a block: changes what tells a blocked message from a send on its cmd");
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
@@ -709,9 +781,9 @@ export const hasEntry = (map: unknown, entry: string, fw: string): boolean => en
 const under = (segs: readonly string[], home: readonly string[]) => segs.length >= home.length && home.every((h, i) => segs[i] === h);
 
 /** The messages a firmware sees: the base map's, with the firmware's delta standing in for those it names. */
-function messagesFor(map: Json, fw: string): Record<string, Json> {
+function messagesFor(map: Json, fw?: string): Record<string, Json> {
   const base = at(map, ["messages"]);
-  const delta = at(map, ["firmwares", fw, "messages"]);
+  const delta = fw === undefined ? undefined : at(map, ["firmwares", fw, "messages"]);
   return { ...(isObject(base) ? base : {}), ...(isObject(delta) ? delta : {}) };
 }
 
