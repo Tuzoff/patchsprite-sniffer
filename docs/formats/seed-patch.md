@@ -53,7 +53,7 @@ Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f
 | `entry` | yes | the entry it covers (see Entries) |
 | `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
 | `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry, so only for `add` and `block`); only when the seed loads |
-| `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
+| `source` | for `add`, `repair`, `confirm` | the source kind the entry gets once the change is in (see Sources) |
 | `mode` | for an `@<mode>` entry or a grouped parameter | the mode the unit was in when the evidence was seen, for a map with `modes` (see Modes) |
 | `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
 | `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
@@ -191,7 +191,7 @@ carry none of it, a `suspect` needs some, and a `block` needs a freeze or a docu
 
 ## Sources
 
-The provenance words a change can give its entry, each backed by at least one piece of its evidence. A change claims
+The source kinds a change can give its entry, each backed by at least one piece of its evidence. A change claims
 no more trust than its evidence shows.
 
 | `source` | Backed by |
@@ -203,8 +203,9 @@ no more trust than its evidence shows.
 | `player-confirmed` | a player's `yes` |
 | `doc` | a `doc` |
 
-These are the map's provenance words (sniffer spec, Map format) plus `player-confirmed`, which is new here, from the
-first-contact design. The map's `test` provenance is for the app's own test maps and never appears in a patch.
+These are the map's source kinds (`source.kind`, device-map-protocol.md) plus `player-confirmed`, which is new here,
+from the first-contact design, and gives the map no source (see Applying a patch). The map's `test` kind is for the
+app's own hardware-check runs and never appears in a patch.
 
 ## Applying a patch
 
@@ -219,10 +220,24 @@ first-contact design. The map's `test` provenance is for the app's own test maps
    `suspect` names an entry the map lacks (a `block` may name one), or when its probe evidence breaks the probe rule.
 4. Keep the marks (`confirm`, `suspect`, `block`) in the reader's own per-firmware store.
 
-No op writes `provenance` (anywhere, in a path or a value) or a draft's top-level `status` and `gaps`:
-`checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. Giving the
-changed entries the change's `source` as their provenance is the reader's job; `applySeedPatch` doesn't do it yet,
-because where a map keeps per-entry provenance isn't settled.
+No op writes an entry's `source` (the map's `{kind, ref}` on a message, a parameter or a choice, in the base or a
+firmware delta), `provenance` (anywhere, in a path or a value), or a draft's top-level `status` and `gaps`:
+`checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. A measured
+value's own `source` is not an entry's and may be written.
+
+`applySeedPatch` gives the entry its source itself, on a message, a parameter or a choice (the entries the map keeps
+one on), in the unit's firmware delta when the delta has the entry, else in the base:
+
+- `kind` is the change's `source`, and `ref` says what the evidence that backs it was read from: a document's
+  citation, the probe's request and time, or the capture's id in `sources` with its hash.
+- An `add` or `repair` replaces the old source, which backed the claim as it was. A `confirm` only raises it
+  (`doc` < `wire` < `device-reported` < `read-back` < `replay-verified`), never lowers it; the entry's bytes and
+  fingerprint don't change, since the map leaves `source` out of the fingerprint.
+- `player-confirmed` is the unit's own trust level, which the app keeps outside the map, so it gives no source, and
+  an edit backed only by a player's yes drops the old one.
+
+A draft's top-level `provenance` stays its own bookkeeping; folding it into per-entry sources is the map's move, not a
+patch's.
 
 ## What needs review
 

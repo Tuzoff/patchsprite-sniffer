@@ -299,9 +299,9 @@ export const ACTIONS = ["add", "repair", "remove", "confirm", "suspect", "block"
 export type Action = (typeof ACTIONS)[number];
 
 /**
- * Where the entry's claim comes from once the change is in, the map's provenance words: `wire` (a capture),
+ * Where the entry's claim comes from once the change is in, the map's source kinds: `wire` (a capture),
  * `device-reported` (S17), `read-back` (the unit answered or read back as the map says), `replay-verified`,
- * `player-confirmed` (the player saw it happen), `doc`.
+ * `player-confirmed` (the player saw it happen; gives the map no source), `doc`.
  */
 export const SOURCES = ["wire", "device-reported", "read-back", "replay-verified", "player-confirmed", "doc"] as const;
 export type Source = (typeof SOURCES)[number];
@@ -384,6 +384,29 @@ const backs: Record<Source, (e: Evidence) => boolean> = {
   doc: (e) => e.kind === "doc",
 };
 
+/** Where the map keeps an entry's `source` ({kind, ref}, device-map-protocol.md): on a message, a parameter, a choice. */
+const SOURCE_HOMES = [["messages", "*"], ["parameters", "groups", "*", "params", "*"], ["choices", "*"]] as const;
+const SOURCE_KEYS = SOURCE_HOMES.flatMap((h) => [[...h, "source"], ["firmwares", "*", ...h, "source"]]);
+
+/** A value holds something at `pat` (`*` is any key). */
+const holdsAt = (v: unknown, pat: readonly string[]): boolean => {
+  if (!pat.length) return true;
+  const [k, ...rest] = pat;
+  if (!isObject(v)) return false;
+  return k === "*" ? Object.values(v).some((x) => holdsAt(x, rest)) : Object.hasOwn(v, k) && holdsAt(v[k], rest);
+};
+
+/** An op at `segs` that puts `value` there writes an entry's `source`: it is at or under one, or its value holds one. */
+function writesSource(segs: readonly string[], value: unknown, hasValue: boolean): boolean {
+  return SOURCE_KEYS.some((pat) => {
+    for (let i = 0; i < pat.length; i++) {
+      if (i === segs.length) return hasValue && holdsAt(value, pat.slice(i));
+      if (pat[i] !== "*" && pat[i] !== segs[i]) return false;
+    }
+    return true;
+  });
+}
+
 /**
  * Rules the schema can't state: unique ids and entries, ops that fit the action and stay inside the entry's homes,
  * no two changes editing the same place, a source the evidence backs, and evidence sources that exist.
@@ -424,6 +447,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
       if (op.op === "add" && INDEX_RE.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
       if (BOOKKEEPING.has(segs[0]) || segs.includes("provenance") || ("value" in op && keysIn(op.value).has("provenance")))
         add(`.ops[${j}]`, "provenance comes from the change's source and evidence, and status and gaps are the draft's own bookkeeping; ops never write them");
+      if (writesSource(segs, "value" in op ? op.value : undefined, "value" in op))
+        add(`.ops[${j}]`, "an entry's source comes from the change's source and evidence; ops never write it");
       const other = overlapIn(edited, segs);
       if (other !== undefined) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${other}]`);
     });
@@ -699,7 +724,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
 export type ChangeStatus =
   /** its ops are in the map */
   | "applied"
-  /** a mark (confirm, suspect, block): the map is unchanged and the reader keeps the mark in its own store */
+  /** a mark (confirm, suspect, block): the reader keeps the mark in its own store; the map is unchanged, but for a confirm that raises the entry's source */
   | "marked"
   /** not in the accepted set */
   | "skipped"
@@ -914,6 +939,49 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   return null;
 }
 
+/** The map's source kinds, weakest first (device-map-protocol.md, `source`). */
+const SOURCE_RANK = ["doc", "wire", "device-reported", "read-back", "replay-verified", "test"];
+
+/** What the evidence that backs a change's source was read from, for the entry's `source.ref`. */
+function sourceRef(p: SeedPatch, c: Change): string | undefined {
+  const e = c.source ? c.evidence.find(backs[c.source]) : undefined;
+  if (!e) return undefined;
+  const file = "source" in e && e.source !== undefined ? `${e.source}${p.sources?.[e.source]?.sha256 ? ` sha256:${p.sources[e.source].sha256!.slice(0, 16)}` : ""}` : undefined;
+  const ref =
+    e.kind === "doc" ? e.citation
+    : e.kind === "probe" ? `probe ${e.request} at ${e.at}`
+    : e.kind === "read-back" || e.kind === "map-check" ? `${e.kind} at ${e.at}`
+    : file !== undefined ? `${e.kind} ${file}`
+    : "at" in e ? `${e.kind} at ${e.at}` : undefined;
+  return ref?.slice(0, 512);
+}
+
+/**
+ * Give the entry the change's source, as the map keeps it: `{kind, ref}` on a message, a parameter or a choice, in the
+ * unit's firmware delta when it has the entry there (the evidence is about what that firmware reads), else in the base.
+ * An edit's source replaces the old one, which backed the claim as it was; a confirm only raises it. `player-confirmed`
+ * is the unit's own trust level, kept outside the map, so it gives no source, and an edit backed only by it drops the
+ * old one.
+ */
+function giveSource(doc: Json, p: SeedPatch, c: Change, paths: string[][]): void {
+  const homes = paths.filter((h) => {
+    const own = h[0] === "firmwares" ? h.slice(2) : h;
+    return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
+  });
+  const delta = homes.filter((h) => h[0] === "firmwares");
+  const kind = c.source !== undefined && SOURCE_RANK.includes(c.source) ? c.source : undefined;
+  const ref = kind ? sourceRef(p, c) : undefined;
+  for (const h of delta.length ? delta : homes) {
+    const entry = at(doc, h);
+    if (!isObject(entry)) continue;
+    const had = isObject(entry.source) && typeof entry.source.kind === "string" ? SOURCE_RANK.indexOf(entry.source.kind) : -1;
+    if (c.action === "confirm") {
+      if (kind && SOURCE_RANK.indexOf(kind) > had) entry.source = ref ? { kind, ref } : { kind };
+    } else if (kind) entry.source = ref ? { kind, ref } : { kind };
+    else delete entry.source;
+  }
+}
+
 /**
  * Apply a checked patch to a copy of the map, change by change, each all or nothing. `accept` limits it to the
  * changes a review accepted. A change whose ops no longer fit (a `was` that doesn't match) is left out as stale,
@@ -949,6 +1017,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
+      if (c.action === "confirm") giveSource(doc, p, c, before);
       return { change: c.id, status: "marked" };
     }
     // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
@@ -972,6 +1041,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
       rollBack(undo);
       return refused(c, why ?? `${c.ops[stray].path} is not where ${c.entry} is`);
     }
+    giveSource(doc, p, c, after);
     return { change: c.id, status: "applied" };
   });
   return { map: doc, rebased, results };
