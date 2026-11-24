@@ -102,7 +102,7 @@ export function entryHomes(e: Entry): string[][] {
   switch (e.kind) {
     case "message":
       // a bare name is also a top-level section this engine doesn't know (a draft's own, or a newer map's)
-      return e.block === undefined ? [["messages", e.message], ["firmwares", FW, "messages", e.message], [e.message]] : [["messages", e.message], ["firmwares", FW, "messages", e.message]];
+      return [["messages", e.message], ["firmwares", FW, "messages", e.message], ...(e.block === undefined ? [[e.message]] : [])];
     case "measured":
       return [e.field.split(".")];
     case "param":
@@ -488,6 +488,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
   const out: { change: string; reason: string }[] = [];
   for (const c of p.changes) {
     const reasons = new Set<string>();
+    const measured = parseEntry(c.entry)?.kind === "measured";
     if (c.action === "remove") reasons.add("removes an entry");
     for (const op of c.ops ?? []) {
       const segs = splitPointer(op.path);
@@ -504,7 +505,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
-      if (segs[0] === "transport" && parseEntry(c.entry)?.kind !== "measured") reasons.add("changes the framing of every message");
+      if (segs[0] === "transport" && !measured) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
@@ -693,13 +694,13 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     if (accept && !accept.has(c.id)) return { change: c.id, status: "skipped" };
     const probe = unsafeProbe(probed, c);
     if (probe) return refused(c, probe);
-    const found = entryPaths(doc, c.entry, fw);
-    if (parseEntry(c.entry)?.kind === "message" && found.some((h) => h.length === 1) && found.some((h) => h.length > 1)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
+    const kind = parseEntry(c.entry)?.kind;
+    const before = entryPaths(doc, c.entry, fw);
+    if (kind === "message" && before.some((h) => h.length === 1) && before.some((h) => h.length > 1)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
     if (!c.ops) {
-      if ((c.action === "confirm" || c.action === "suspect") && !hasEntry(doc, c.entry, fw)) return refused(c, "the map has no such entry to mark");
+      if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
       return { change: c.id, status: "marked" };
     }
-    const before = entryPaths(doc, c.entry, fw);
     // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
     if (c.action === "add" && before.length) return { change: c.id, status: "stale", why: "the map already has the entry" };
     const undo: Undo = new Map();
@@ -715,7 +716,6 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     const why =
       c.action === "remove" ? (after.length ? "the entry is still there" : null) : !after.length ? "the entry isn't there after the ops" : null;
     // a parameter or setting is found by its id, so its ops must land on that one, not another in the same table
-    const kind = parseEntry(c.entry)?.kind;
     const own = c.action === "add" ? after : before;
     const stray = kind === "param" || kind === "setting" ? c.ops.findIndex((_, j) => !own.some((h) => under(landed[j], h))) : -1;
     if (why || stray >= 0) {
