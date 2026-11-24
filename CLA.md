@@ -4,7 +4,7 @@ Thank you for contributing. This Agreement sets out the terms on which You give 
 
 ## 1. Definitions
 
-- **"We", "Us" and "Our"** mean Dmitrii Tuzov, of British Columbia, Canada, and any person or company to whom this Agreement is assigned under section 10.
+- **"We", "Us" and "Our"** mean Leadt Technology Inc., a Canadian corporation, and any person or company to whom this Agreement is assigned under section 10.
 - **"You" and "Your"** mean the individual who signs this Agreement, or the legal entity on whose behalf it is signed. For an entity, this includes every entity that controls it, is controlled by it, or is under common control with it.
 - **"Project"** means the repository at github.com/patchsprite-app/patchsprite-sniffer, including the engine package in it, and any other project We maintain that names this Agreement as its contributor agreement.
 - **"Contribution"** means any work of authorship, such as code, documentation, tests, schemas or file formats, that You Submit to Us for the Project, now or in the future, including anything You Submitted before signing. It does not include anything You clearly mark in writing as "Not a Contribution" when You Submit it.
