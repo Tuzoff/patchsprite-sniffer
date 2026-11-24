@@ -8,7 +8,6 @@ A signed [Contributor License Agreement](CLA.md) is required before a pull reque
 
 The CLA applies to every part of this repository, including the shared engine package (`packages/engine`, coming soon). The project's copyright holder also uses that package in its own products, which the CLA allows. Pull requests to it are not merged without a signed CLA.
 
-
 ## What not to submit
 
 - No vendor files, firmware, or vendor software.
