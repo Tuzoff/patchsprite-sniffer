@@ -517,11 +517,6 @@ const SEP = "\u0000";
 function blockPins(map: Json): Set<string> {
   const out = new Set<string>();
   const firmwares = at(map, ["firmwares"]);
-  const layoutsOf = (fw?: string) => {
-    const base = at(map, ["layouts"]);
-    const delta = fw === undefined ? undefined : at(map, ["firmwares", fw, "layouts"]);
-    return { ...(isObject(base) ? base : {}), ...(isObject(delta) ? delta : {}) };
-  };
   const blockedOf = (fw?: string) =>
     [at(map, ["blocked"]), fw === undefined ? undefined : at(map, ["firmwares", fw, "blocked"])].flatMap((b) => (Array.isArray(b) ? b.filter((x) => typeof x === "string") : []));
   for (const fw of [undefined, ...(isObject(firmwares) ? Object.keys(firmwares) : [])]) {
@@ -532,13 +527,14 @@ function blockPins(map: Json): Set<string> {
       const m = messages[b];
       return isObject(m) && typeof m.cmd === "string" ? [m.cmd] : [];
     });
-    const layouts = layoutsOf(fw);
     for (const [n, m] of Object.entries(messages)) {
       if (!isObject(m)) continue;
-      const shares = (m.dir === "send" || m.dir === "request") && typeof m.cmd === "string" && cmds.some((c) => cmdsOverlap(m.cmd as string, c));
-      if (!blocked.has(n) && !shares) continue;
+      const { cmd, dir } = m;
+      const shares = (dir === "send" || dir === "request") && typeof cmd === "string" && cmds.some((c) => cmdsOverlap(cmd, c));
+      if (!shares && !blocked.has(n)) continue;
       for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
-      if (typeof m.payload === "string" && Object.hasOwn(layouts, m.payload)) out.add(["layouts", m.payload].join(SEP));
+      // by name, whether or not this view has the layout: adding the layout a pinned payload names is a pin change too
+      if (typeof m.payload === "string") out.add(["layouts", m.payload].join(SEP));
     }
   }
   return out;

@@ -268,7 +268,7 @@ test("a change that could lift a block goes to review: the pins that tell a bloc
 
   // a send moved onto the blocked cmd, and a block put on a send whose payload another change edits
   assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "7f", was: fingerprint("22") })), [`c-setBypass: ${LIFT}`]);
-  const block: Change = { ...edit("blocked", { op: "add", path: "/firmwares/1.20/blocked", value: ["setPreset"] }) };
+  const block = edit("blocked", { op: "add", path: "/firmwares/1.20/blocked", value: ["setPreset"] });
   const rename = edit("setPreset", { op: "replace", path: "/messages/setPreset/payload/fields/0/name", value: "slot", was: fingerprint("preset") });
   assert.deepEqual(reasons(block, rename), ["c-blocked: changes safety rules, blocked lists or hazards", `c-setPreset: ${LIFT}`]);
 

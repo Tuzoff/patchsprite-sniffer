@@ -258,9 +258,10 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
   prints for the model driving the vendor editor.
 
-A repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values) isn't on this list on
-purpose, away from a blocked cmd: fixing those is what a seed patch is for. It reaches other players the way any unit's evidence does, through
-the trust levels: verified on the owner's unit by read-back, then confirmed by a second unit or by review.
+Away from a blocked cmd, a repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values)
+isn't on this list on purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's
+evidence does, through the trust levels: verified on the owner's unit by read-back, then confirmed by a second unit or
+by review.
 
 ## Fingerprints
 
