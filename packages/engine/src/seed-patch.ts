@@ -454,6 +454,8 @@ function keysIn(v: unknown, out = new Set<string>()): Set<string> {
 /** A value holds a send: a message the app writes to the unit. */
 const holdsSend = (v: unknown): boolean =>
   Array.isArray(v) ? v.some(holdsSend) : isObject(v) && (v.dir === "send" || Object.values(v).some(holdsSend));
+/** The value at a path ending in `last` makes a send: a `dir` that is `send`, or a value that holds one. */
+const makesSend = (v: unknown, last: string | undefined): boolean => (last === "dir" ? v === "send" : holdsSend(v));
 
 /**
  * Why a person must review a change before it reaches players other than the unit's owner (live updates design,
@@ -469,8 +471,13 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
     for (const op of c.ops ?? []) {
       const segs = splitPointer(op.path);
       const put = "value" in op ? keysIn(op.value) : new Set<string>();
-      const taken = op.op === "add" ? new Set<string>() : keysIn(at(base as Json, segs));
-      const keys = new Set([...segs, ...put, ...taken]);
+      const old = op.op === "add" ? undefined : at(base as Json, segs);
+      // what goes is the value whose fingerprint is `was`; when the base map has another one there (an earlier op
+      // moved an array's items, or the patch is stale), what goes isn't known, so a person looks
+      if (op.op !== "add" && fingerprint(old) !== op.was) reasons.add("takes out something other than what the base map has there");
+      // a firmware's delta stands in for the base map's entry on that firmware, so what it covers counts as taken out
+      const covered = segs[0] === "firmwares" && op.op !== "remove" ? at(base as Json, segs.slice(2)) : undefined;
+      const keys = new Set([...segs, ...put, ...keysIn(old), ...keysIn(covered)]);
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
@@ -478,7 +485,9 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       if (segs[0] === "transport") reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
-      if (op.op === "add" && (holdsSend(op.value) || (segs[0] === "controls" && segs.length <= 3))) reasons.add("adds something that writes to the unit");
+      const last = segs.at(-1);
+      if (("value" in op && makesSend(op.value, last) && !makesSend(old, last)) || (op.op === "add" && segs[0] === "controls" && segs.length <= 3))
+        reasons.add("adds something that writes to the unit");
       // agentNotes reach the player's chat model; safety.notes reach the model that drives a sniffer walk
       if (keys.has("agentNotes") || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
     }
@@ -530,16 +539,20 @@ function save(undo: Undo, c: Json[] | Record<string, Json>): void {
 
 function rollBack(undo: Undo): void {
   for (const [c, was] of undo) {
-    if (Array.isArray(c)) c.splice(0, c.length, ...(was as Json[]));
-    else {
+    // by index and by defining keys: spreading a long array overflows the stack, and assigning an own `__proto__`
+    // key would set the prototype instead
+    if (Array.isArray(c)) {
+      c.length = 0;
+      (was as Json[]).forEach((x, i) => (c[i] = x));
+    } else {
       for (const k of Object.keys(c)) delete c[k];
-      Object.assign(c, was);
+      for (const [k, x] of Object.entries(was)) Object.defineProperty(c, k, { value: x, writable: true, enumerable: true, configurable: true });
     }
   }
 }
 
-/** Apply one op in place, or say why not. */
-function applyOp(doc: Json, op: Op, undo: Undo): string | null {
+/** Apply one op in place, adding the path it wrote to `landed` (an append's `-` as its index), or say why not. */
+function applyOp(doc: Json, op: Op, undo: Undo, landed: string[][]): string | null {
   const segs = splitPointer(op.path);
   // an add opens the objects on its way that aren't there yet, such as the delta of a firmware the map lacks
   if (op.op === "add") {
@@ -558,6 +571,7 @@ function applyOp(doc: Json, op: Op, undo: Undo): string | null {
   if (op.op === "add") {
     if (Array.isArray(parent) && last === "-") {
       save(undo, parent);
+      landed.push([...segs.slice(0, -1), String(parent.length)]);
       parent.push(structuredClone(op.value) as Json);
       return null;
     }
@@ -565,6 +579,7 @@ function applyOp(doc: Json, op: Op, undo: Undo): string | null {
     if (target !== undefined) return `${op.path}: already there`;
     save(undo, parent);
     parent[last] = structuredClone(op.value) as Json;
+    landed.push(segs);
     return null;
   }
   if (target === undefined) return `${op.path}: not there`;
@@ -574,6 +589,7 @@ function applyOp(doc: Json, op: Op, undo: Undo): string | null {
   if (op.op === "replace") (box as Record<string, Json>)[last] = structuredClone(op.value) as Json;
   else if (Array.isArray(box)) box.splice(Number(last), 1);
   else delete box[last];
+  landed.push(segs);
   return null;
 }
 
@@ -612,20 +628,26 @@ export const hasEntry = (map: unknown, entry: string, fw: string): boolean => en
 
 const under = (segs: readonly string[], home: readonly string[]) => segs.length >= home.length && home.every((h, i) => segs[i] === h);
 
+/** The messages a firmware sees: the base map's, with the firmware's delta standing in for those it names. */
+function messagesFor(map: Json, fw: string): Record<string, Json> {
+  const base = at(map, ["messages"]);
+  const delta = at(map, ["firmwares", fw, "messages"]);
+  return { ...(isObject(base) ? base : {}), ...(isObject(delta) ? delta : {}) };
+}
+
 /**
  * A probe the seed doesn't allow: the request it names isn't a request in the map, isn't marked `safeRead` in a map that
  * marks them, or has a command a send in the same map also uses, so the "read" may have changed something on the unit.
+ * `messages` are the map's as the unit was probed, before the patch.
  */
-function unsafeProbe(map: Json, c: Change): string | null {
-  const messages = at(map, ["messages"]);
-  if (!isObject(messages)) return null;
+function unsafeProbe(messages: Record<string, Json>, c: Change): string | null {
   for (const e of c.evidence) {
     if (e.kind !== "probe") continue;
     const m = Object.hasOwn(messages, e.request) ? messages[e.request] : undefined;
     if (!isObject(m) || m.dir !== "request") return `probed ${e.request}, which is not a request in the map`;
     // once a map marks its safe reads, only those are probed
     if (m.safeRead !== true && Object.values(messages).some((x) => isObject(x) && Object.hasOwn(x, "safeRead"))) return `probed ${e.request}, which the map has not marked safeRead`;
-    const sends = Object.entries(messages).filter(([, x]) => isObject(x) && x.dir === "send" && x.cmd === m.cmd);
+    const sends = m.cmd === undefined ? [] : Object.entries(messages).filter(([, x]) => isObject(x) && x.dir === "send" && x.cmd === m.cmd);
     if (sends.length) return `probed ${e.request}, whose command ${String(m.cmd)} the send ${sends[0][0]} also uses`;
   }
   return null;
@@ -641,20 +663,25 @@ function unsafeProbe(map: Json, c: Change): string | null {
 export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<string>): { map: unknown; rebased: boolean; results: ChangeResult[] } {
   const doc = structuredClone(map) as Json;
   const fw = p.unit.firmware;
+  // from the input map, which is never changed: doc's messages change as the changes land
+  const probed = messagesFor(map as Json, fw);
   const rebased = fingerprint(map) !== p.base.file;
   const refused = (c: Change, why: string): ChangeResult => ({ change: c.id, status: "refused", why });
   const results: ChangeResult[] = p.changes.map((c) => {
     if (accept && !accept.has(c.id)) return { change: c.id, status: "skipped" };
-    const probe = unsafeProbe(doc, c);
+    const probe = unsafeProbe(probed, c);
     if (probe) return refused(c, probe);
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !hasEntry(doc, c.entry, fw)) return refused(c, "the map has no such entry to mark");
       return { change: c.id, status: "marked" };
     }
     const before = entryPaths(doc, c.entry, fw);
+    // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
+    if (c.action === "add" && before.length) return { change: c.id, status: "stale", why: "the map already has the entry" };
     const undo: Undo = new Map();
+    const landed: string[][] = [];
     for (const op of c.ops) {
-      const why = applyOp(doc, op, undo);
+      const why = applyOp(doc, op, undo, landed);
       if (why) {
         rollBack(undo);
         return { change: c.id, status: "stale", why };
@@ -666,10 +693,10 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     // a parameter or setting is found by its id, so its ops must land on that one, not another in the same table
     const kind = parseEntry(c.entry)?.kind;
     const own = c.action === "add" ? after : before;
-    const stray = kind === "param" || kind === "setting" ? c.ops.find((op) => !own.some((h) => under(splitPointer(op.path), h))) : undefined;
-    if (why || stray) {
+    const stray = kind === "param" || kind === "setting" ? c.ops.findIndex((_, j) => !own.some((h) => under(landed[j], h))) : -1;
+    if (why || stray >= 0) {
       rollBack(undo);
-      return refused(c, why ?? `${stray!.path} is not where ${c.entry} is`);
+      return refused(c, why ?? `${c.ops[stray].path} is not where ${c.entry} is`);
     }
     return { change: c.id, status: "applied" };
   });

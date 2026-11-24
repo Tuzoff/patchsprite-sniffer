@@ -166,7 +166,7 @@ test("applying: stale changes are left out, the rest still land", () => {
 
   map.messages.setTempo = { cmd: "40", dir: "send" };
   const again = applySeedPatch(map, example()).results.find((r) => r.change === "tempo")!;
-  assert.deepEqual([again.status, again.why], ["stale", "/messages/setTempo: already there"]);
+  assert.deepEqual([again.status, again.why], ["stale", "the map already has the entry"]);
 });
 
 test("applying: only the accepted changes, all or nothing each, and they must do what they say", () => {
@@ -196,9 +196,10 @@ test("applying: only the accepted changes, all or nothing each, and they must do
 });
 
 test("review reasons come from the ops and the base map, not from the producer", () => {
-  const reasons = (...changes: Change[]) => reviewReasons(withChanges(...changes), seed()).map((r) => r.reason);
+  // the seed plus the sections the replaces and removes below take things out of
+  const base = { ...seed(), safety: { rules: [] }, firmwares: { "1.20": { blocked: ["x"] } }, controls: { items: { volume: { type: "cc", cc: 7, label: "Volume" } } } };
+  const reasons = (...changes: Change[]) => reviewReasons(withChanges(...changes), base).map((r) => r.reason);
   const edit = (entry: string, ...ops: NonNullable<Change["ops"]>): Change => ({ id: "c", entry, action: "repair", source: "wire", ops, evidence: [capture] });
-  const base = seed();
   assert.deepEqual(reasons(edit("nameReply", { op: "replace", path: "/messages/nameReply/cmd", value: "32", was: fingerprint("31") })), []);
   assert.deepEqual(reasons(edit("safety", { op: "remove", path: "/safety/rules", was: fingerprint([]) })), ["changes safety rules, blocked lists or hazards"]);
   assert.deepEqual(reasons(edit("blocked", { op: "replace", path: "/firmwares/1.20/blocked", value: [], was: fingerprint(["x"]) })), ["changes safety rules, blocked lists or hazards"]);
@@ -215,7 +216,21 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("setPreset", { op: "replace", path: "/messages/setPreset/payload", value: { fields: [{ name: "preset", type: "u8" }] }, was: fingerprint(payload) })), ["changes what may be written"]);
   assert.deepEqual(reasons(edit("setPreset", { op: "remove", path: "/messages/setPreset/payload/fields/0", was: fingerprint(payload.fields[0]) })), ["changes what may be written"]);
 
+  // an op that takes out what the base map doesn't have there: here the second remove takes the item that moved up,
+  // the one with the limit, so what goes isn't known from the base map alone
+  const fields = [{ name: "a", type: "u8" }, { name: "b", type: "u8", max: 9 }];
+  const shifted = { ...base, messages: { ...base.messages, setPreset: { ...base.messages.setPreset, payload: { fields } } } };
+  const twoRemoves = edit("setPreset", { op: "remove", path: "/messages/setPreset/payload/fields/0", was: fingerprint(fields[0]) }, { op: "remove", path: "/messages/setPreset/payload/fields/0", was: fingerprint(fields[1]) });
+  assert.deepEqual(reviewReasons(withChanges(twoRemoves), shifted).map((r) => r.reason), ["takes out something other than what the base map has there"]);
+  assert.equal(applySeedPatch(shifted, withChanges(twoRemoves)).results[0].status, "applied", "the apply takes both, the limit with them");
+
+  // a firmware's delta covers the base map's entry: one without the base's limit drops it on that firmware
+  assert.deepEqual(reasons(edit("setPreset", { op: "add", path: "/firmwares/1.20/messages/setPreset", value: { cmd: "12", dir: "request" } })), ["changes what may be written"]);
+
   // a new send, a new control, a control that now sends elsewhere
+  assert.deepEqual(reasons(edit("getName", { op: "replace", path: "/messages/getName/dir", value: "send", was: fingerprint("request") })), ["adds something that writes to the unit"]);
+  assert.deepEqual(reasons(edit("getName", { op: "replace", path: "/messages/getName", value: { cmd: "7f", dir: "send" }, was: fingerprint(base.messages.getName) })), ["adds something that writes to the unit"]);
+  assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "23", was: fingerprint("22") })), []);
   assert.deepEqual(reasons({ ...edit("setTempo", { op: "add", path: "/messages/setTempo", value: { cmd: "40", dir: "send" } }), action: "add" }), ["adds something that writes to the unit"]);
   assert.deepEqual(reasons({ ...edit("getTempo", { op: "add", path: "/messages/getTempo", value: { cmd: "41", dir: "request" } }), action: "add" }), []);
   assert.deepEqual(reasons({ ...edit("control/volume", { op: "add", path: "/controls/items/volume", value: { type: "cc", cc: 7 } }), action: "add" }), ["may change what a control sends to", "adds something that writes to the unit"]);
@@ -258,6 +273,46 @@ test("applying checks a change against the map: its own parameter, an entry to m
   assert.match(applySeedPatch(map, withChanges(sharedCmd)).results[0].why!, /not marked safeRead/);
   map.messages.getPreset.safeRead = true;
   assert.equal(applySeedPatch(map, withChanges(sharedCmd)).results[0].status, "marked");
+});
+
+test("applying: a failed change leaves the map exactly as it was, arrays and new objects included", () => {
+  const map = { ...seed(), settings: { items: [{ id: "a" }, { id: "b" }] } };
+  const before = structuredClone(map);
+  const failing = (entry: string, ...ops: NonNullable<Change["ops"]>): Change => ({ id: "c", entry, action: "repair", source: "wire", ops, evidence: [capture] });
+  const late = { op: "remove", path: "/messages/setPreset/nothing", was: fingerprint(1) } as const;
+  for (const c of [
+    failing("setPreset", { op: "add", path: "/firmwares/1.20/messages/setPreset/x", value: 1 }, { op: "add", path: "/messages/setPreset/payload/fields/-", value: { name: "y" } }, late),
+    failing("setPreset", { op: "remove", path: "/messages/setPreset/payload/fields/0", was: fingerprint(map.messages.setPreset.payload.fields[0]) }, late),
+    failing("setting/b", { op: "remove", path: "/settings/items/0", was: fingerprint({ id: "a" }) }),
+  ]) {
+    const { map: out, results } = applySeedPatch(map, withChanges(c));
+    assert.notEqual(results[0].status, "applied");
+    assert.deepEqual(out, before);
+  }
+  assert.deepEqual(map, before, "the input map is never changed");
+});
+
+test("applying: a new setting is appended where its id lands, and an add finds no entry there yet", () => {
+  const map = { ...seed(), settings: { items: [{ id: "a" }] } };
+  const add = (id: string): Change => ({ id: "c", entry: `setting/${id}`, action: "add", source: "wire", ops: [{ op: "add", path: "/settings/items/-", value: { id } }], evidence: [capture] });
+  const r = applySeedPatch(map, withChanges(add("b")));
+  assert.equal(r.results[0].status, "applied");
+  assert.deepEqual((r.map as typeof map).settings.items, [{ id: "a" }, { id: "b" }]);
+  assert.deepEqual(applySeedPatch(map, withChanges(add("a"))).results[0], { change: "c", status: "stale", why: "the map already has the entry" });
+});
+
+test("applying: probes are judged against the map as probed, the unit's firmware delta included", () => {
+  const map = seed();
+  map.firmwares = { "1.20": { messages: { wipe: { cmd: "10", dir: "send" }, getTempo: { cmd: "41", dir: "request" } } } };
+  const confirm = (request: string): Change => ({ id: "c", entry: "getName", action: "confirm", source: "read-back", evidence: [{ ...probeOk, request }] });
+  assert.match(applySeedPatch(map, withChanges(confirm("getPreset"))).results[0].why!, /command 10 the send wipe also uses/);
+  assert.equal(applySeedPatch(map, withChanges(confirm("getTempo"))).results[0].status, "marked");
+  // an earlier change in the same patch can't make a later probe look safe
+  const toRequest: Change = { id: "d", entry: "setPreset", action: "repair", source: "wire", ops: [{ op: "replace", path: "/messages/setPreset/dir", value: "request", was: fingerprint("send") }], evidence: [capture] };
+  const probeSet: Change = { ...confirm("setPreset"), entry: "getPreset" };
+  assert.match(applySeedPatch(seed(), withChanges(toRequest, probeSet)).results[1].why!, /not a request in the map/);
+  const noMessages = { ...seed(), messages: undefined };
+  assert.match(applySeedPatch(noMessages, withChanges({ ...confirm("getPreset"), entry: "transport" })).results[0].why!, /not a request in the map/);
 });
 
 test("a repair may open the unit's own firmware delta", () => {

@@ -141,7 +141,9 @@ the patch: only messages whose `dir` is `request`, whose command appears in a li
 editor's own capture, and never a command the same seed also uses for a send. Once maps mark safe reads (`safeRead`),
 only those. Probes run under the pedal lock, like any other traffic to the unit. When a patch is applied, a change
 whose `probe` evidence names a request that breaks the parts of this rule the map shows (not a request, not marked
-`safeRead` in a map that marks them, or a command a send also uses) is `refused`.
+`safeRead` in a map that marks them, or a command a send also uses) is `refused`. The applier judges this against the
+map as it was before the patch, with the unit's firmware delta standing in for the messages it names, so an earlier
+change in the same patch can't make a probe look safe.
 
 Evidence **against** the entry as the seed has it: a probe that is `mismatch` or `silent`, a read-back or replay that
 `differs`, a map check that `contradicts`, `disagrees` or `reopens`, a player's `no`, and any freeze. A `confirm` may
@@ -169,7 +171,8 @@ first-contact design. The map's `test` provenance is for the app's own test maps
 1. Check it: the schema, then `checkSeedPatch`. A patch that fails is refused whole.
 2. Work out what needs a person (`reviewReasons`, below) and which changes a review accepted.
 3. Apply the accepted changes in order, each all or nothing, to a copy of the map (`applySeedPatch`). A change whose
-   ops no longer fit (an `add` where something is, a `was` that doesn't match) is left out as `stale`, and the rest
+   ops no longer fit (an `add` where something is, an `add` change whose entry the map already has, a `was` that
+   doesn't match) is left out as `stale`, and the rest
    still land, so a patch made against an older seed is still useful wherever its entries didn't change. When
    `base.file` doesn't match the map, the result says `rebased`. A change is `refused` when its ops ran but don't do
    what its action says, when they edit another parameter or setting than its entry names, when a `confirm` or
@@ -185,10 +188,13 @@ because where a map keeps per-entry provenance isn't settled.
 
 Whatever the producer says, the reader works out from the ops and the base map (`reviewReasons(patch, map)`) which
 changes a person must review before they reach any player other than the unit's owner (live updates design,
-"Versions, rollback and trust"). A key counts wherever it appears: in the op's path, in the value it puts in, or in
-the value a `replace` or `remove` takes out of the base map, so dropping a limit by replacing its parent counts too.
+"Versions, rollback and trust"). A key counts wherever it appears: in the op's path, in the value it puts in, in
+the value a `replace` or `remove` takes out of the base map, or in the base map's entry that an edit to the unit's
+firmware delta covers, so dropping a limit by replacing its parent, or by a delta without it, counts too.
 
 - removing an entry;
+- a `replace` or `remove` whose `was` isn't the base map's value at its path (an earlier op moved an array's items, or
+  the patch was made against another map), since then what it takes out isn't known;
 - `safety`, `blocked` or `hazards`;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
@@ -197,7 +203,8 @@ the value a `replace` or `remove` takes out of the base map, so dropping a limit
 - `/session`, which is sent every time a port opens;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
-- adding anything that writes to the unit: a message whose `dir` is `send`, or a new control;
+- anything new that writes to the unit: a value that makes a message's `dir` `send` where it wasn't, or a new
+  control;
 - text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
   prints for the model driving the vendor editor.
 
