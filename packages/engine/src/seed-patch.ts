@@ -498,11 +498,48 @@ const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb"
 /** Keys of a message that decide which bytes it sends: its cmd, its direction and its payload (inline or a layout's name). */
 const PIN_KEYS = ["cmd", "dir", "payload"];
 
-/** Two cmds can be the same bytes: as long, and each token the same or a `{placeholder}` on either side (the app's rule). */
-function cmdsOverlap(a: string, b: string): boolean {
-  const x = a.toLowerCase().split(" ");
-  const y = b.toLowerCase().split(" ");
-  return x.length === y.length && x.every((t, i) => t.startsWith("{") || y[i].startsWith("{") || t === y[i]);
+/** The app's longest cmd, in bytes (`transport.inner.cmdLength`). A longer one can't load, so it is judged by nothing. */
+const MAX_CMD_TOKENS = 8;
+
+/** A cmd's tokens and which of them are `{placeholders}`, as bits; null past the app's longest cmd. */
+function parseCmd(cmd: string): { toks: string[]; mask: number } | null {
+  const toks = cmd.toLowerCase().split(" ");
+  if (toks.length > MAX_CMD_TOKENS) return null;
+  return { toks, mask: toks.reduce((m, t, i) => (t.startsWith("{") ? m | (1 << i) : m), 0) };
+}
+
+const maskedKey = (toks: readonly string[], mask: number) => toks.map((t, i) => (mask & (1 << i) ? "*" : t)).join(" ");
+
+/**
+ * Blocked cmds, for asking whether a cmd can be the bytes of one: as long, and each token the same or a placeholder on
+ * either side (the app's rule). They are grouped by length and placeholder positions, so a lookup costs a Set probe
+ * per group rather than a compare per cmd. A cmd past the app's longest can't load and matches everything.
+ */
+class BlockedCmds {
+  private readonly groups = new Map<number, Map<number, string[][]>>();
+  private readonly keyed = new Map<string, Set<string>>();
+  private all = false;
+  add(cmd: string): void {
+    const c = parseCmd(cmd);
+    if (!c) return void (this.all = true);
+    let byMask = this.groups.get(c.toks.length);
+    if (!byMask) this.groups.set(c.toks.length, (byMask = new Map()));
+    const list = byMask.get(c.mask);
+    if (list) list.push(c.toks);
+    else byMask.set(c.mask, [c.toks]);
+  }
+  hits(cmd: string): boolean {
+    const c = parseCmd(cmd);
+    if (!c || this.all) return true;
+    for (const [mask, list] of this.groups.get(c.toks.length) ?? []) {
+      const both = mask | c.mask;
+      const id = `${c.toks.length}/${mask}/${both}`;
+      let keys = this.keyed.get(id);
+      if (!keys) this.keyed.set(id, (keys = new Set(list.map((t) => maskedKey(t, both)))));
+      if (keys.has(maskedKey(c.toks, both))) return true;
+    }
+    return false;
+  }
 }
 
 const SEP = "\u0000";
@@ -510,32 +547,55 @@ const SEP = "\u0000";
 /**
  * Where a change may lift a block, as joined paths. A block is per message: the app lets a send share a blocked
  * message's cmd only while their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them
- * apart, so those pins are what keep the block standing. For the base map and each firmware's view of it, this is the
- * `cmd`, `dir` and `payload` of every blocked message and of every send or request whose cmd can be a blocked one's,
- * and the layouts their payloads name. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
+ * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir` and `payload` of every blocked
+ * message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, and what a
+ * mode stands in for any of them. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
+ *
+ * A reviewer may accept any subset of a patch's changes, so each message counts with every cmd, direction and payload
+ * it has in any of `maps` (the base map and the map the whole patch leaves), on the base and in every firmware's delta.
  */
-function blockPins(map: Json): Set<string> {
-  const out = new Set<string>();
-  const firmwares = at(map, ["firmwares"]);
-  const blockedOf = (fw?: string) =>
-    [at(map, ["blocked"]), fw === undefined ? undefined : at(map, ["firmwares", fw, "blocked"])].flatMap((b) => (Array.isArray(b) ? b.filter((x) => typeof x === "string") : []));
-  for (const fw of [undefined, ...(isObject(firmwares) ? Object.keys(firmwares) : [])]) {
-    const messages = messagesFor(map, fw);
-    const blocked = new Set(blockedOf(fw).filter((b) => Object.hasOwn(messages, b)));
-    if (!blocked.size) continue;
-    const cmds = [...blocked].flatMap((b) => {
-      const m = messages[b];
-      return isObject(m) && typeof m.cmd === "string" ? [m.cmd] : [];
+function blockPins(maps: readonly Json[]): Set<string> {
+  const seen = new Map<string, Record<string, Json>[]>();
+  const blocked = new Set<string>();
+  const modes: Record<string, Json>[] = [];
+  for (const map of maps) {
+    const firmwares = at(map, ["firmwares"]);
+    const deltas = isObject(firmwares) ? Object.values(firmwares) : [];
+    for (const messages of [at(map, ["messages"]), ...deltas.map((d) => at(d, ["messages"]))])
+      if (isObject(messages))
+        for (const [n, m] of Object.entries(messages)) {
+          if (!isObject(m)) continue;
+          const list = seen.get(n);
+          if (list) list.push(m);
+          else seen.set(n, [m]);
+        }
+    for (const list of [at(map, ["blocked"]), ...deltas.map((d) => at(d, ["blocked"]))])
+      if (Array.isArray(list)) for (const b of list) if (typeof b === "string") blocked.add(b);
+    const use = at(map, ["modes", "use"]);
+    if (isObject(use)) for (const u of Object.values(use)) if (isObject(u)) modes.push(u);
+  }
+  // what stands in for `name` in some mode; one mapped to itself doesn't
+  const standIns = (kind: "messages" | "layouts", name: string) =>
+    modes.flatMap((u) => {
+      const t = u[kind];
+      const v = isObject(t) && Object.hasOwn(t, name) ? t[name] : undefined;
+      return typeof v === "string" && v !== name ? [v] : [];
     });
-    for (const [n, m] of Object.entries(messages)) {
-      if (!isObject(m)) continue;
-      const { cmd, dir } = m;
-      const shares = (dir === "send" || dir === "request") && typeof cmd === "string" && cmds.some((c) => cmdsOverlap(cmd, c));
-      if (!shares && !blocked.has(n)) continue;
-      for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
-      // by name, whether or not this view has the layout: adding the layout a pinned payload names is a pin change too
-      if (typeof m.payload === "string") out.add(["layouts", m.payload].join(SEP));
-    }
+  for (const b of [...blocked]) for (const s of standIns("messages", b)) blocked.add(s);
+  const cmds = new BlockedCmds();
+  for (const b of blocked) for (const m of seen.get(b) ?? []) if (typeof m.cmd === "string") cmds.add(m.cmd);
+
+  const out = new Set<string>();
+  const pin = (n: string) => {
+    for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
+    // by name, whether or not a view has the layout: adding the layout a pinned payload names is a pin change too
+    for (const m of seen.get(n) ?? [])
+      if (typeof m.payload === "string") for (const l of [m.payload, ...standIns("layouts", m.payload)]) out.add(["layouts", l].join(SEP));
+  };
+  for (const b of blocked) pin(b);
+  for (const [n, ms] of seen) {
+    const sends = ms.some((m) => m.dir === "send" || m.dir === "request");
+    if (sends && ms.some((m) => typeof m.cmd === "string" && cmds.hits(m.cmd))) for (const x of [n, ...standIns("messages", n)]) pin(x);
   }
   return out;
 }
@@ -588,8 +648,8 @@ const isMeasured = (v: unknown): boolean =>
 export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
   // the pins as the base map has them and as the whole patch leaves them, so a change that brings a send onto a
-  // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place
-  const pins = new Set([...blockPins(base as Json), ...blockPins(applySeedPatch(base, p).map as Json)]);
+  // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place, whatever subset is accepted
+  const pins = blockPins([base as Json, applySeedPatch(base, p).map as Json]);
   const above = abovePins(pins);
   for (const c of p.changes) {
     const reasons = new Set<string>();
@@ -777,9 +837,9 @@ export const hasEntry = (map: unknown, entry: string, fw: string): boolean => en
 const under = (segs: readonly string[], home: readonly string[]) => segs.length >= home.length && home.every((h, i) => segs[i] === h);
 
 /** The messages a firmware sees: the base map's, with the firmware's delta standing in for those it names. */
-function messagesFor(map: Json, fw?: string): Record<string, Json> {
+function messagesFor(map: Json, fw: string): Record<string, Json> {
   const base = at(map, ["messages"]);
-  const delta = fw === undefined ? undefined : at(map, ["firmwares", fw, "messages"]);
+  const delta = at(map, ["firmwares", fw, "messages"]);
   return { ...(isObject(base) ? base : {}), ...(isObject(delta) ? delta : {}) };
 }
 

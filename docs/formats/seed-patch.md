@@ -239,9 +239,11 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - anything that may lift a block. A block is per message: the app lets a send share a blocked message's cmd only while
   their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them apart. So a change to
   the `cmd`, `dir` or `payload` of a blocked message, or of a send or request whose cmd can be a blocked one's
-  (placeholders match any byte), or to a layout such a payload names, is reviewed. That includes a firmware delta of
-  one, and the map as the whole patch leaves it, so moving a send onto a blocked cmd, or blocking a message whose
-  payload another change edits, counts too;
+  (placeholders match any byte), or to a layout such a payload names, or to what a mode stands in for any of these,
+  is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
+  counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
+  a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
+  whose payload another change edits;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's

@@ -272,6 +272,20 @@ test("a change that could lift a block goes to review: the pins that tell a bloc
   const rename = edit("setPreset", { op: "replace", path: "/messages/setPreset/payload/fields/0/name", value: "slot", was: fingerprint("preset") });
   assert.deepEqual(reasons(block, rename), ["c-blocked: changes safety rules, blocked lists or hazards", `c-setPreset: ${LIFT}`]);
 
+  // whatever subset a reviewer accepts: a send moved onto the blocked cmd while the block moves off it is still flagged,
+  // since accepting only the first leaves both on 7f
+  const onto = edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "7f", was: fingerprint("22") });
+  const off = edit("factoryReset", { op: "replace", path: "/messages/factoryReset/cmd", value: "99", was: fingerprint("7f") });
+  assert.deepEqual(reasons(onto, off), [`c-setBypass: ${LIFT}`, `c-factoryReset: ${LIFT}`]);
+
+  // a mode's stand-in for a pinned layout or message is pinned too
+  const moded = { ...structuredClone(base), modes: { use: { bass: { layouts: { scene: "sceneBass" }, messages: { factoryReset: "factoryResetBass" } } } } };
+  moded.layouts.sceneBass = structuredClone(base.layouts.scene);
+  moded.messages.factoryResetBass = { cmd: "7e", dir: "send", payload: pin(1) };
+  const modedReasons = (c: Change) => reviewReasons(withChanges(c), moded).map((r) => r.reason);
+  assert.deepEqual(modedReasons(edit("layout/sceneBass", { op: "replace", path: "/layouts/sceneBass/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  assert.deepEqual(modedReasons(edit("factoryResetBass", { op: "replace", path: "/messages/factoryResetBass/cmd", value: "7d", was: fingerprint("7e") })), [LIFT]);
+
   // away from the block's cmd, a payload or cmd repair is still not a review reason
   assert.deepEqual(reasons(rename), []);
   assert.deepEqual(reasons(edit("nameReply", { op: "replace", path: "/messages/nameReply/cmd", value: "32", was: fingerprint("31") })), []);
