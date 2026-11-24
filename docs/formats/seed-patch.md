@@ -103,6 +103,9 @@ is there (`add`, `repair`) or gone (`remove`). A parameter or setting is found b
 that the ops landed on that one (where it was for a `repair` or `remove`, where it is for an `add`) and not on another
 in the same table; `checkSeedPatch` has no map, so this check happens only when the patch is applied.
 
+A firmware delta's message, layout or constant replaces the base one whole for that firmware, as the app's engine
+reads it (map-checks.md, "Fingerprints"); it is not merged into the base one.
+
 ## Ops
 
 An op is a JSON Patch (RFC 6902) operation with a guard:
@@ -207,6 +210,10 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   control;
 - text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
   prints for the model driving the vendor editor.
+
+A repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values) isn't on this list on
+purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's evidence does, through
+the trust levels: verified on the owner's unit by read-back, then confirmed by a second unit or by review.
 
 ## Fingerprints
 
