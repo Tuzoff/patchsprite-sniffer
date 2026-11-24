@@ -12,6 +12,8 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 
 Run the tests with `npm ci && npm test` (Node 22.18 or newer).
 
+This repo holds no secrets, and none may ever be added: no Actions secrets, no keys or tokens in files, and no device mappings or captures. Checks that need private data (such as the leak check) run from Patchsprite's closed CI, not here.
+
 This repository contains the sniffer and the shared engine package only. It does not contain device mappings, vendor files or vendor software.
 
 ## License
