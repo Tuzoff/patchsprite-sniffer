@@ -236,6 +236,14 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - a `replace` or `remove` whose `was` isn't the base map's value at its path (an earlier op moved an array's items, or
   the patch was made against another map), since then what it takes out isn't known;
 - `safety`, `blocked` or `hazards`;
+- anything that may lift a block. A block is per message: the app lets a send share a blocked message's cmd only while
+  their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them apart. So a change to
+  the `cmd`, `dir` or `payload` of a blocked message, or of a send or request whose cmd can be a blocked one's
+  (placeholders match any byte), or to a layout such a payload names, or to what a mode stands in for any of these,
+  is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
+  counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
+  a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
+  whose payload another change edits;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
@@ -252,9 +260,10 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
   prints for the model driving the vendor editor.
 
-A repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values) isn't on this list on
-purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's evidence does, through
-the trust levels: verified on the owner's unit by read-back, then confirmed by a second unit or by review.
+Away from a blocked cmd, a repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values)
+isn't on this list on purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's
+evidence does, through the trust levels: verified on the owner's unit by read-back, then confirmed by a second unit or
+by review.
 
 ## Fingerprints
 

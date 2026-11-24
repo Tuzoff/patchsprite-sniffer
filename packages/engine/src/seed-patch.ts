@@ -495,6 +495,135 @@ const PROBE_KEYS = new Set(["safeRead", "readBack"]);
 /** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */
 const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb", "lsb", "channel", "bits"]);
 
+/** Keys of a message that decide which bytes it sends: its cmd, its direction and its payload (inline or a layout's name). */
+const PIN_KEYS = ["cmd", "dir", "payload"];
+
+/** The app's longest cmd, in bytes (`transport.inner.cmdLength`). A longer one can't load, so it is judged by nothing. */
+const MAX_CMD_TOKENS = 8;
+
+/** A cmd's tokens and which of them are `{placeholders}`, as bits; null past the app's longest cmd. */
+function parseCmd(cmd: string): { toks: string[]; mask: number } | null {
+  const toks = cmd.toLowerCase().split(" ");
+  if (toks.length > MAX_CMD_TOKENS) return null;
+  return { toks, mask: toks.reduce((m, t, i) => (t.startsWith("{") ? m | (1 << i) : m), 0) };
+}
+
+const maskedKey = (toks: readonly string[], mask: number) => toks.map((t, i) => (mask & (1 << i) ? "*" : t)).join(" ");
+
+/**
+ * Blocked cmds, for asking whether a cmd can be the bytes of one: as long, and each token the same or a placeholder on
+ * either side (the app's rule). They are grouped by length and placeholder positions, so a lookup costs a Set probe
+ * per group rather than a compare per cmd. A cmd past the app's longest can't load and matches everything.
+ */
+class BlockedCmds {
+  private readonly groups = new Map<number, Map<number, string[][]>>();
+  private readonly keyed = new Map<string, Set<string>>();
+  private all = false;
+  add(cmd: string): void {
+    const c = parseCmd(cmd);
+    if (!c) return void (this.all = true);
+    let byMask = this.groups.get(c.toks.length);
+    if (!byMask) this.groups.set(c.toks.length, (byMask = new Map()));
+    const list = byMask.get(c.mask);
+    if (list) list.push(c.toks);
+    else byMask.set(c.mask, [c.toks]);
+  }
+  hits(cmd: string): boolean {
+    const c = parseCmd(cmd);
+    if (!c || this.all) return true;
+    for (const [mask, list] of this.groups.get(c.toks.length) ?? []) {
+      const both = mask | c.mask;
+      const id = `${c.toks.length}/${mask}/${both}`;
+      let keys = this.keyed.get(id);
+      if (!keys) this.keyed.set(id, (keys = new Set(list.map((t) => maskedKey(t, both)))));
+      if (keys.has(maskedKey(c.toks, both))) return true;
+    }
+    return false;
+  }
+}
+
+const SEP = "\u0000";
+
+/**
+ * Where a change may lift a block, as joined paths. A block is per message: the app lets a send share a blocked
+ * message's cmd only while their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them
+ * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir` and `payload` of every blocked
+ * message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, and what a
+ * mode stands in for any of them. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
+ *
+ * A reviewer may accept any subset of a patch's changes, so each message counts with every cmd, direction and payload
+ * it has in any of `maps` (the base map and the map the whole patch leaves), on the base and in every firmware's delta.
+ */
+function blockPins(maps: readonly Json[]): Set<string> {
+  const seen = new Map<string, Record<string, Json>[]>();
+  const blocked = new Set<string>();
+  // what stands in for a message or layout in some mode; one mapped to itself doesn't
+  const stand = { messages: new Map<string, Set<string>>(), layouts: new Map<string, Set<string>>() };
+  for (const map of maps) {
+    const firmwares = at(map, ["firmwares"]);
+    const deltas = isObject(firmwares) ? Object.values(firmwares) : [];
+    for (const messages of [at(map, ["messages"]), ...deltas.map((d) => at(d, ["messages"]))])
+      if (isObject(messages))
+        for (const [n, m] of Object.entries(messages)) {
+          if (!isObject(m)) continue;
+          const list = seen.get(n);
+          if (list) list.push(m);
+          else seen.set(n, [m]);
+        }
+    for (const list of [at(map, ["blocked"]), ...deltas.map((d) => at(d, ["blocked"]))])
+      if (Array.isArray(list)) for (const b of list) if (typeof b === "string") blocked.add(b);
+    const use = at(map, ["modes", "use"]);
+    if (isObject(use))
+      for (const u of Object.values(use))
+        for (const kind of ["messages", "layouts"] as const) {
+          const t = isObject(u) ? u[kind] : undefined;
+          if (isObject(t))
+            for (const [name, v] of Object.entries(t))
+              if (typeof v === "string" && v !== name) {
+                const set = stand[kind].get(name);
+                if (set) set.add(v);
+                else stand[kind].set(name, new Set([v]));
+              }
+        }
+  }
+  const standIns = (kind: "messages" | "layouts", name: string): Iterable<string> => stand[kind].get(name) ?? [];
+  for (const b of [...blocked]) for (const s of standIns("messages", b)) blocked.add(s);
+  const cmds = new BlockedCmds();
+  for (const b of blocked) for (const m of seen.get(b) ?? []) if (typeof m.cmd === "string") cmds.add(m.cmd);
+
+  const out = new Set<string>();
+  const pin = (n: string) => {
+    for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
+    // by name, whether or not a view has the layout: adding the layout a pinned payload names is a pin change too
+    for (const m of seen.get(n) ?? [])
+      if (typeof m.payload === "string") for (const l of [m.payload, ...standIns("layouts", m.payload)]) out.add(["layouts", l].join(SEP));
+  };
+  for (const b of blocked) pin(b);
+  for (const [n, ms] of seen) {
+    const sends = ms.some((m) => m.dir === "send" || m.dir === "request");
+    if (sends && ms.some((m) => typeof m.cmd === "string" && cmds.hits(m.cmd))) for (const x of [n, ...standIns("messages", n)]) pin(x);
+  }
+  return out;
+}
+
+/** The paths above the pins: a whole message, a section. */
+function abovePins(pins: Set<string>): Set<string> {
+  const out = new Set<string>();
+  for (const pin of pins) {
+    const segs = pin.split(SEP);
+    for (let i = 1; i < segs.length; i++) out.add(segs.slice(0, i).join(SEP));
+  }
+  return out;
+}
+
+/** An op at `segs` writes a block's pin: at or under one, or above one (a whole message, section or firmware delta). */
+function writesPin(segs: readonly string[], pins: Set<string>, above: Set<string>): boolean {
+  if (segs[0] === "firmwares" && segs.length <= 2) return pins.size > 0;
+  const own = segs[0] === "firmwares" ? segs.slice(2) : segs;
+  for (let i = 1; i <= own.length; i++) if (pins.has(own.slice(0, i).join(SEP))) return true;
+  return above.has(own.join(SEP));
+}
+
 /** Keys anywhere inside a value. */
 function keysIn(v: unknown, out = new Set<string>()): Set<string> {
   if (Array.isArray(v)) for (const x of v) keysIn(x, out);
@@ -524,6 +653,10 @@ const isMeasured = (v: unknown): boolean =>
 
 export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
+  // the pins as the base map has them and as the whole patch leaves them, so a change that brings a send onto a
+  // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place, whatever subset is accepted
+  const pins = blockPins([base as Json, applySeedPatch(base, p).map as Json]);
+  const above = abovePins(pins);
   for (const c of p.changes) {
     const reasons = new Set<string>();
     const measured = parseEntry(c.entry)?.kind === "measured";
@@ -540,6 +673,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const keys = new Set([...segs, ...put, ...keysIn(old), ...keysIn(covered)]);
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
+      if (writesPin(segs, pins, above)) reasons.add("may lift a block: changes what tells a blocked message from a send on its cmd");
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
