@@ -88,16 +88,20 @@ map-check record about the same entry use the same name.
 | `constant/<name>` | a named constant | `/constants/<name>`, `/firmwares/<fw>/constants/<name>` |
 | `control/<name>` | a MIDI channel control | `/controls/items/<name>` |
 | `setting/<id>` | a global setting | `/settings/items/*` |
-| `transport`, `host`, `identity`, `driver`, `scratch`, `audio`, `display` | that whole section | `/<section>` |
+| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 
 The first four kinds are the app's; the rest are new here. `identity` is the proposed key for the unit's identity
-reply. The words that start a kind (`param`, `setting`, `choice`, `layout`, `enum`, `constant`, `control` and the
-section names) are never message names.
+reply, `session` for what is sent when a port opens (`onConnect`) and `hazards` for the seed's hazard list. The whole
+`parameters` section covers a parameter group that doesn't say which blocks it serves, and the whole `controls`
+section covers the channel and preset settings outside `controls.items`. The words that start a kind (`param`,
+`setting`, `choice`, `layout`, `enum`, `constant`, `control` and the section names) are never message names.
 
 A change's ops stay inside its entry's homes. `<fw>` is the unit's own firmware: evidence from one firmware changes
-the base map or that firmware's delta, never another firmware's. A parameter or setting is found by its id, so after
-the ops run the applier checks that the entry is there (`add`, `repair`) or gone (`remove`).
+the base map or that firmware's delta, never another firmware's. After the ops run, the applier checks that the entry
+is there (`add`, `repair`) or gone (`remove`). A parameter or setting is found by its id, so the applier also checks
+that the ops landed on that one (where it was for a `repair` or `remove`, where it is for an `add`) and not on another
+in the same table; `checkSeedPatch` has no map, so this check happens only when the patch is applied.
 
 ## Ops
 
@@ -132,6 +136,13 @@ another. Appends to one array (`-`) are each a new place, so two changes may bot
 
 A `source` names an entry of the patch's `sources`.
 
+**Who may be probed.** The app's probe runner decides which requests first contact sends to an unknown unit, never
+the patch: only messages whose `dir` is `request`, whose command appears in a list the unit reported or in the
+editor's own capture, and never a command the same seed also uses for a send. Once maps mark safe reads (`safeRead`),
+only those. Probes run under the pedal lock, like any other traffic to the unit. When a patch is applied, a change
+whose `probe` evidence names a request that breaks the parts of this rule the map shows (not a request, not marked
+`safeRead` in a map that marks them, or a command a send also uses) is `refused`.
+
 Evidence **against** the entry as the seed has it: a probe that is `mismatch` or `silent`, a read-back or replay that
 `differs`, a map check that `contradicts`, `disagrees` or `reopens`, a player's `no`, and any freeze. A `confirm` may
 carry none of it, a `suspect` needs some, and a `block` needs a freeze or a document.
@@ -160,23 +171,35 @@ first-contact design. The map's `test` provenance is for the app's own test maps
 3. Apply the accepted changes in order, each all or nothing, to a copy of the map (`applySeedPatch`). A change whose
    ops no longer fit (an `add` where something is, a `was` that doesn't match) is left out as `stale`, and the rest
    still land, so a patch made against an older seed is still useful wherever its entries didn't change. When
-   `base.file` doesn't match the map, the result says `rebased`. A change whose ops ran but don't do what its action
-   says is `refused`.
+   `base.file` doesn't match the map, the result says `rebased`. A change is `refused` when its ops ran but don't do
+   what its action says, when they edit another parameter or setting than its entry names, when a `confirm` or
+   `suspect` names an entry the map lacks (a `block` may name one), or when its probe evidence breaks the probe rule.
 4. Keep the marks (`confirm`, `suspect`, `block`) in the reader's own per-firmware store.
 
-The applier gives the entries it changed the change's `source` as their provenance; a patch never edits a draft's own
-bookkeeping (`status`, `gaps`, `provenance`).
+No op writes `provenance` (anywhere, in a path or a value) or a draft's top-level `status` and `gaps`:
+`checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. Giving the
+changed entries the change's `source` as their provenance is the reader's job; `applySeedPatch` doesn't do it yet,
+because where a map keeps per-entry provenance isn't settled.
 
 ## What needs review
 
-Whatever the producer says, the reader works out from the ops which changes a person must review before they reach
-any player other than the unit's owner (live updates design, "Versions, rollback and trust"):
+Whatever the producer says, the reader works out from the ops and the base map (`reviewReasons(patch, map)`) which
+changes a person must review before they reach any player other than the unit's owner (live updates design,
+"Versions, rollback and trust"). A key counts wherever it appears: in the op's path, in the value it puts in, or in
+the value a `replace` or `remove` takes out of the base map, so dropping a limit by replacing its parent counts too.
 
 - removing an entry;
-- anything under `safety` or `blocked`, or a value that holds one;
-- what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, anywhere in the path or value;
+- `safety`, `blocked` or `hazards`;
+- what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`;
+- what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
+  fingerprint, so only review catches them);
 - the framing (`/transport`), which every message depends on;
-- `agentNotes`, the only map text the chat model reads as guidance.
+- `/session`, which is sent every time a port opens;
+- a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
+  `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
+- adding anything that writes to the unit: a message whose `dir` is `send`, or a new control;
+- text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
+  prints for the model driving the vendor editor.
 
 ## Fingerprints
 

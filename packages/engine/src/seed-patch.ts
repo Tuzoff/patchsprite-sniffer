@@ -39,7 +39,7 @@ const u16 = z.number().int().min(0).max(0xffff);
 // ---- entries ------------------------------------------------------------------------------------------------------
 
 /** Whole sections a change may cover as one entry. */
-export const SECTION_ENTRIES = ["transport", "host", "identity", "driver", "safety", "blocked", "scratch", "audio", "display"] as const;
+export const SECTION_ENTRIES = ["transport", "host", "identity", "driver", "session", "safety", "blocked", "hazards", "scratch", "audio", "display", "parameters", "controls"] as const;
 /** Kinds of entry written `<kind>/<name>`. */
 export const NAMED_KINDS = ["choice", "layout", "enum", "constant", "control"] as const;
 /** Words a map may not name a message, since they start other kinds of entry (parseEntry never reads them as one). */
@@ -303,6 +303,9 @@ export const SeedPatchSchema = z.strictObject({
 });
 export type SeedPatch = z.infer<typeof SeedPatchSchema>;
 
+type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+const isObject = (v: unknown): v is Record<string, Json> => v !== null && typeof v === "object" && !Array.isArray(v);
+
 // ---- checks beyond the schema ---------------------------------------------------------------------------------------
 
 export interface Issue {
@@ -312,6 +315,8 @@ export interface Issue {
 }
 
 const EDITS: readonly Action[] = ["add", "repair", "remove"];
+/** A draft map's own bookkeeping at its top level, which no op writes. */
+const BOOKKEEPING = new Set(["status", "gaps", "provenance"]);
 
 /** Evidence against the entry as the base map has it. */
 const contradicts = (e: Evidence): boolean =>
@@ -364,6 +369,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
       if (c.action === "add" && op.op !== "add") add(`.ops[${j}].op`, "an add only adds");
       if (c.action === "remove" && op.op !== "remove") add(`.ops[${j}].op`, "a remove only removes");
       if (op.op === "add" && INDEX_RE.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
+      if (BOOKKEEPING.has(segs[0]) || segs.includes("provenance") || ("value" in op && keysIn(op.value).has("provenance")))
+        add(`.ops[${j}]`, "provenance comes from the change's source and evidence, and status and gaps are the draft's own bookkeeping; ops never write them");
       const other = overlapIn(edited, segs);
       if (other !== undefined) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${other}]`);
     });
@@ -426,8 +433,12 @@ const formatPath = (path: readonly PropertyKey[]) => path.map((k, i) => (typeof 
 
 // ---- review ---------------------------------------------------------------------------------------------------------
 
-const SAFETY_SEGMENTS = new Set(["safety", "blocked"]);
+const SAFETY_KEYS = new Set(["safety", "blocked", "hazards"]);
 const WRITE_RANGE_KEYS = new Set(["allowed", "writable", "min", "max", "saturate", "readOnly"]);
+/** Keys that decide what first contact sends to an unknown unit and whether a write counts as verified. */
+const PROBE_KEYS = new Set(["safeRead", "readBack"]);
+/** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */
+const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb", "lsb", "channel", "bits"]);
 
 /** Keys anywhere inside a value. */
 function keysIn(v: unknown, out = new Set<string>()): Set<string> {
@@ -440,24 +451,36 @@ function keysIn(v: unknown, out = new Set<string>()): Set<string> {
   return out;
 }
 
+/** A value holds a send: a message the app writes to the unit. */
+const holdsSend = (v: unknown): boolean =>
+  Array.isArray(v) ? v.some(holdsSend) : isObject(v) && (v.dir === "send" || Object.values(v).some(holdsSend));
+
 /**
  * Why a person must review a change before it reaches players other than the unit's owner (live updates design,
- * "Versions, rollback and trust"). Worked out from the ops, never taken from the producer, so a patch can't talk its
- * way past review: removing an entry, touching safety or blocked lists, changing what may be written (ranges and
- * allowed values), changing the framing, and adding text the chat model reads (agentNotes).
+ * "Versions, rollback and trust"). Worked out from the ops and the base map, never taken from the producer, so a patch
+ * can't talk its way past review. A replace or remove is judged by what it takes out of the base map as well as what
+ * it puts in, so dropping a limit by replacing its parent still counts. `base` is the map the patch is applied to.
  */
-export function reviewReasons(p: SeedPatch): { change: string; reason: string }[] {
+export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
   for (const c of p.changes) {
     const reasons = new Set<string>();
     if (c.action === "remove") reasons.add("removes an entry");
     for (const op of c.ops ?? []) {
       const segs = splitPointer(op.path);
-      const keys = new Set([...segs, ...("value" in op ? keysIn(op.value) : [])]);
-      if ([...keys].some((k) => SAFETY_SEGMENTS.has(k))) reasons.add("changes safety rules or blocked lists");
-      if ([...keys].some((k) => WRITE_RANGE_KEYS.has(k))) reasons.add("changes what may be written");
+      const put = "value" in op ? keysIn(op.value) : new Set<string>();
+      const taken = op.op === "add" ? new Set<string>() : keysIn(at(base as Json, segs));
+      const keys = new Set([...segs, ...put, ...taken]);
+      const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
+      if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
+      if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
+      if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (segs[0] === "transport") reasons.add("changes the framing of every message");
-      if (keys.has("agentNotes")) reasons.add("adds text the chat model reads");
+      if (segs[0] === "session") reasons.add("changes what is sent on every connect");
+      if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
+      if (op.op === "add" && (holdsSend(op.value) || (segs[0] === "controls" && segs.length <= 3))) reasons.add("adds something that writes to the unit");
+      // agentNotes reach the player's chat model; safety.notes reach the model that drives a sniffer walk
+      if (keys.has("agentNotes") || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
     }
     for (const reason of reasons) out.push({ change: c.id, reason });
   }
@@ -484,9 +507,6 @@ export interface ChangeResult {
   why?: string;
 }
 
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
-const isObject = (v: unknown): v is Record<string, Json> => v !== null && typeof v === "object" && !Array.isArray(v);
-
 /** The value at a path, or undefined. */
 function at(doc: Json | undefined, segs: readonly string[]): Json | undefined {
   let cur: Json | undefined = doc;
@@ -498,14 +518,37 @@ function at(doc: Json | undefined, segs: readonly string[]): Json | undefined {
   return cur;
 }
 
+/**
+ * What a change touched, to put back if it fails: each container it changed, as a shallow copy from before its first
+ * change. The values an op writes are fresh copies, so restoring the containers restores the map.
+ */
+type Undo = Map<Json[] | Record<string, Json>, Json[] | Record<string, Json>>;
+
+function save(undo: Undo, c: Json[] | Record<string, Json>): void {
+  if (!undo.has(c)) undo.set(c, Array.isArray(c) ? [...c] : { ...c });
+}
+
+function rollBack(undo: Undo): void {
+  for (const [c, was] of undo) {
+    if (Array.isArray(c)) c.splice(0, c.length, ...(was as Json[]));
+    else {
+      for (const k of Object.keys(c)) delete c[k];
+      Object.assign(c, was);
+    }
+  }
+}
+
 /** Apply one op in place, or say why not. */
-function applyOp(doc: Json, op: Op): string | null {
+function applyOp(doc: Json, op: Op, undo: Undo): string | null {
   const segs = splitPointer(op.path);
   // an add opens the objects on its way that aren't there yet, such as the delta of a firmware the map lacks
   if (op.op === "add") {
     let up: Json | undefined = doc;
     for (const s of segs.slice(0, -1)) {
-      if (isObject(up) && !Object.hasOwn(up, s)) up[s] = {};
+      if (isObject(up) && !Object.hasOwn(up, s)) {
+        save(undo, up);
+        up[s] = {};
+      }
       up = at(up, [s]);
     }
   }
@@ -514,65 +557,120 @@ function applyOp(doc: Json, op: Op): string | null {
   const target = at(doc, segs);
   if (op.op === "add") {
     if (Array.isArray(parent) && last === "-") {
+      save(undo, parent);
       parent.push(structuredClone(op.value) as Json);
       return null;
     }
     if (!isObject(parent)) return `${op.path}: nothing to add into`;
     if (target !== undefined) return `${op.path}: already there`;
+    save(undo, parent);
     parent[last] = structuredClone(op.value) as Json;
     return null;
   }
   if (target === undefined) return `${op.path}: not there`;
   if (fingerprint(target) !== op.was) return `${op.path}: was ${fingerprint(target)}, the patch expected ${op.was}`;
-  if (op.op === "replace") {
-    if (Array.isArray(parent)) parent[Number(last)] = structuredClone(op.value) as Json;
-    else (parent as Record<string, Json>)[last] = structuredClone(op.value) as Json;
-  } else if (Array.isArray(parent)) parent.splice(Number(last), 1);
-  else delete (parent as Record<string, Json>)[last];
+  const box = parent as Json[] | Record<string, Json>;
+  save(undo, box);
+  if (op.op === "replace") (box as Record<string, Json>)[last] = structuredClone(op.value) as Json;
+  else if (Array.isArray(box)) box.splice(Number(last), 1);
+  else delete box[last];
   return null;
 }
 
 /**
- * Whether the map has the entry for a firmware: in the firmware's delta or the base. A parameter is found by block
- * and id, a setting by id; anything else at its home.
+ * Where an entry is in a map for a firmware, as concrete paths: its delta's and the base's homes that exist; for a
+ * parameter, every parameter with its id in a group that lists its block; for a setting, every item with its id.
  */
-export function hasEntry(map: unknown, entry: string, fw: string): boolean {
+export function entryPaths(map: unknown, entry: string, fw: string): string[][] {
   const e = parseEntry(entry);
-  if (!e || !isObject(map)) return false;
+  if (!e || !isObject(map)) return [];
   const doc = map as Json;
+  const out: string[][] = [];
   if (e.kind === "param") {
     const groups = at(doc, ["parameters", "groups"]);
-    if (!isObject(groups)) return false;
-    return Object.values(groups).some(
-      (g) => isObject(g) && Array.isArray(g.blocks) && g.blocks.includes(e.block) && isObject(g.params) && Object.values(g.params).some((x) => isObject(x) && x.id === e.id),
-    );
+    if (isObject(groups))
+      for (const [g, grp] of Object.entries(groups)) {
+        if (!isObject(grp) || !Array.isArray(grp.blocks) || !grp.blocks.includes(e.block) || !isObject(grp.params)) continue;
+        for (const [k, x] of Object.entries(grp.params)) if (isObject(x) && x.id === e.id) out.push(["parameters", "groups", g, "params", k]);
+      }
+    return out;
   }
   if (e.kind === "setting") {
     const items = at(doc, ["settings", "items"]);
-    return Array.isArray(items) && items.some((x) => isObject(x) && x.id === e.id);
+    if (Array.isArray(items)) items.forEach((x, i) => isObject(x) && x.id === e.id && out.push(["settings", "items", String(i)]));
+    return out;
   }
-  return entryHomes(e).some((h) => !h.includes("*") && at(doc, h.map((s) => (s === FW ? fw : s))) !== undefined);
+  for (const h of entryHomes(e)) {
+    const path = h.map((s) => (s === FW ? fw : s));
+    if (at(doc, path) !== undefined) out.push(path);
+  }
+  return out;
+}
+
+/** Whether the map has the entry for a firmware, in the firmware's delta or the base. */
+export const hasEntry = (map: unknown, entry: string, fw: string): boolean => entryPaths(map, entry, fw).length > 0;
+
+const under = (segs: readonly string[], home: readonly string[]) => segs.length >= home.length && home.every((h, i) => segs[i] === h);
+
+/**
+ * A probe the seed doesn't allow: the request it names isn't a request in the map, isn't marked `safeRead` in a map that
+ * marks them, or has a command a send in the same map also uses, so the "read" may have changed something on the unit.
+ */
+function unsafeProbe(map: Json, c: Change): string | null {
+  const messages = at(map, ["messages"]);
+  if (!isObject(messages)) return null;
+  for (const e of c.evidence) {
+    if (e.kind !== "probe") continue;
+    const m = Object.hasOwn(messages, e.request) ? messages[e.request] : undefined;
+    if (!isObject(m) || m.dir !== "request") return `probed ${e.request}, which is not a request in the map`;
+    // once a map marks its safe reads, only those are probed
+    if (m.safeRead !== true && Object.values(messages).some((x) => isObject(x) && Object.hasOwn(x, "safeRead"))) return `probed ${e.request}, which the map has not marked safeRead`;
+    const sends = Object.entries(messages).filter(([, x]) => isObject(x) && x.dir === "send" && x.cmd === m.cmd);
+    if (sends.length) return `probed ${e.request}, whose command ${String(m.cmd)} the send ${sends[0][0]} also uses`;
+  }
+  return null;
 }
 
 /**
  * Apply a checked patch to a copy of the map, change by change, each all or nothing. `accept` limits it to the
- * changes a review accepted. Changes whose ops no longer fit (a `was` that doesn't match) are left out as stale,
- * so a patch made against an older map still lands wherever its entries are unchanged.
+ * changes a review accepted. A change whose ops no longer fit (a `was` that doesn't match) is left out as stale,
+ * so a patch made against an older map still lands wherever its entries are unchanged. A change is refused when its
+ * ops don't do what its action says, when they edit another parameter or setting than the one its entry names, when
+ * a confirm or suspect names an entry the map lacks, or when its evidence probed a request the map doesn't allow.
  */
 export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<string>): { map: unknown; rebased: boolean; results: ChangeResult[] } {
-  let doc = structuredClone(map) as Json;
+  const doc = structuredClone(map) as Json;
+  const fw = p.unit.firmware;
   const rebased = fingerprint(map) !== p.base.file;
+  const refused = (c: Change, why: string): ChangeResult => ({ change: c.id, status: "refused", why });
   const results: ChangeResult[] = p.changes.map((c) => {
     if (accept && !accept.has(c.id)) return { change: c.id, status: "skipped" };
-    if (!c.ops) return { change: c.id, status: "marked" };
-    const trial = structuredClone(doc);
-    for (const op of c.ops) {
-      const why = applyOp(trial, op);
-      if (why) return { change: c.id, status: "stale", why };
+    const probe = unsafeProbe(doc, c);
+    if (probe) return refused(c, probe);
+    if (!c.ops) {
+      if ((c.action === "confirm" || c.action === "suspect") && !hasEntry(doc, c.entry, fw)) return refused(c, "the map has no such entry to mark");
+      return { change: c.id, status: "marked" };
     }
-    const has = hasEntry(trial, c.entry, p.unit.firmware);
-    if (c.action === "remove" ? has : !has) return { change: c.id, status: "refused", why: c.action === "remove" ? "the entry is still there" : "the entry isn't there after the ops" };
-    doc = trial;
+    const before = entryPaths(doc, c.entry, fw);
+    const undo: Undo = new Map();
+    for (const op of c.ops) {
+      const why = applyOp(doc, op, undo);
+      if (why) {
+        rollBack(undo);
+        return { change: c.id, status: "stale", why };
+      }
+    }
+    const after = entryPaths(doc, c.entry, fw);
+    const why =
+      c.action === "remove" ? (after.length ? "the entry is still there" : null) : !after.length ? "the entry isn't there after the ops" : null;
+    // a parameter or setting is found by its id, so its ops must land on that one, not another in the same table
+    const kind = parseEntry(c.entry)?.kind;
+    const own = c.action === "add" ? after : before;
+    const stray = kind === "param" || kind === "setting" ? c.ops.find((op) => !own.some((h) => under(splitPointer(op.path), h))) : undefined;
+    if (why || stray) {
+      rollBack(undo);
+      return refused(c, why ?? `${stray!.path} is not where ${c.entry} is`);
+    }
     return { change: c.id, status: "applied" };
   });
   return { map: doc, rebased, results };
