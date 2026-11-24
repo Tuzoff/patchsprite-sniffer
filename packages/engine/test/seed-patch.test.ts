@@ -78,7 +78,7 @@ test("ops must fit the action and stay inside the entry, in the unit's own firmw
   assert.ok(messages(withChanges({ id: "c", entry: "nameReply", action: "add", source: "wire", entryFp: "0123456789abcdef", ops: [{ op: "add", path: "/messages/nameReply/x", value: 1 }], evidence: [capture] })).some((m) => /base map lacks/.test(m)));
   assert.ok(messages(withChanges({ id: "c", entry: "nameReply", action: "repair", source: "wire", entryFp: null, ops: [{ op: "add", path: "/messages/nameReply/x", value: 1 }], evidence: [capture] })).some((m) => /needs an entry the base map has/.test(m)));
   assert.ok(messages(withChanges({ id: "c", entry: "fields", action: "add", source: "wire", ops: [{ op: "add", path: "/messages/fields/0", value: 1 }], evidence: [capture] })).some((m) => /appends to an array with -/.test(m)));
-  assert.ok(messages(withChanges({ id: "c", entry: "setBypass/amp", action: "repair", source: "wire", ops: [{ op: "add", path: "/messages/setBypass/x", value: 1 }], evidence: [capture] })).some((m) => /one block is for marks/.test(m)));
+  assert.ok(messages(withChanges({ id: "c", entry: "setBypass/amp", action: "repair", source: "wire", ops: [{ op: "add", path: "/messages/setBypass/x", value: 1 }], evidence: [capture] })).some((m) => /is for marks/.test(m)));
   assert.match(messages(withChanges({ id: "c", entry: "layout", action: "suspect", evidence: [probeSilent] }))[0], /not an entry name/, "a kind word is never a message name");
   assert.ok(messages(withChanges({ id: "c", entry: "driver", action: "suspect", evidence: [probeSilent] })).length === 0);
 });
@@ -394,11 +394,12 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.match(messages(withChanges(confirm))[0], /must be seen in that mode/);
   assert.match(messages(withChanges({ ...confirm, mode: "guitar" }))[0], /must be seen in that mode/);
   assert.deepEqual(messages(withChanges({ ...confirm, mode: "bass" })), []);
-  // a mode's entry can't make a message of a top-level key's name either
+  // a message in one mode is for marks: bass evidence never edits the message every mode shares
   const modeMsg: Change = { id: "c", entry: "fooBar@bass", action: "add", source: "wire", mode: "bass", ops: [{ op: "add", path: "/messages/fooBar", value: { cmd: "50", dir: "request" } }], evidence: [capture] };
-  assert.equal(applySeedPatch(seed(), withChanges(modeMsg)).results[0].status, "applied");
-  assert.match(applySeedPatch({ ...seed(), fooBar: {} }, withChanges(modeMsg)).results[0].why!, /fooBar is both a message and a top-level section/);
-  const both = { ...seed(), fooBar: {}, messages: { ...seed().messages, fooBar: { cmd: "50", dir: "request" } } };
+  assert.ok(messages(withChanges(modeMsg)).some((m) => /is for marks/.test(m)));
+  // a mode's entry can't stand beside a top-level key of its message's name
+  const bassMode = { modes: { use: { bass: {} } } };
+  const both = { ...seed(), ...bassMode, fooBar: {}, messages: { ...seed().messages, fooBar: { cmd: "50", dir: "request" } } };
   for (const entry of ["fooBar@bass", "fooBar/amp", "fooBar@bass/amp"])
     assert.match(applySeedPatch(both, withChanges({ ...confirm, entry, mode: "bass" })).results[0].why!, /both a message and a top-level section/, entry);
 
@@ -416,6 +417,19 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.match(messages(withChanges(wrongGroup))[0], /outside entry/);
   const rightGroup: Change = { ...wrongGroup, ops: [{ op: "replace", path: "/parameters/groups/bass_amp/params/gain/kind", value: "slider", was: fingerprint("knob") }] };
   assert.equal(applySeedPatch(map, withChanges(rightGroup)).results[0].status, "applied");
+
+  // the mode is checked against the map
+  assert.equal(applySeedPatch(seed(), withChanges({ ...confirm, mode: "bass" })).results[0].why, "the map has no mode bass");
+  assert.equal(applySeedPatch({ ...seed(), ...bassMode }, withChanges({ ...confirm, mode: "bass" })).results[0].status, "marked");
+  const { mode: _m, ...noMode } = rightGroup;
+  assert.match(applySeedPatch(map, withChanges(noMode)).results[0].why!, /needs the mode it was seen in/);
+  map.modes.use.guitar = {};
+  assert.match(applySeedPatch(map, withChanges({ ...rightGroup, mode: "guitar" })).results[0].why!, /stands in for none in mode guitar/);
+  const plainInBass: Change = { id: "c", entry: "param/amp/1", action: "confirm", source: "wire", mode: "bass", evidence: [capture] };
+  assert.match(applySeedPatch(map, withChanges(plainInBass)).results[0].why!, /in mode bass, bass_amp stands in for group amp/);
+  assert.equal(applySeedPatch(map, withChanges({ ...plainInBass, mode: "guitar" })).results[0].status, "marked");
+  map.modes.use.bass.messages = { getPreset: "getPresetBass" };
+  assert.match(applySeedPatch(map, withChanges({ ...plainInBass, entry: "getPreset", source: "read-back", evidence: [probeOk] })).results[0].why!, /getPresetBass stands in for getPreset/);
 
   const modes: Change = { id: "c", entry: "modes", action: "repair", source: "wire", ops: [{ op: "replace", path: "/modes/use/bass/groups/amp", value: "amp", was: fingerprint("bass_amp") }], evidence: [capture] };
   assert.deepEqual(reviewReasons(withChanges(modes), map).map((r) => r.reason), ["changes which entries a mode uses"]);

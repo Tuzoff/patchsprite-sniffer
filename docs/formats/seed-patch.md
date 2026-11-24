@@ -54,7 +54,7 @@ Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f
 | `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
 | `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry, so only for `add` and `block`); only when the seed loads |
 | `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
-| `mode` | for an `@<mode>` entry | the mode the unit was in when the evidence was seen, for a map with `modes`; an `@<mode>` entry needs that same mode, so one mode's evidence never marks another mode's entry |
+| `mode` | for an `@<mode>` entry or a grouped parameter | the mode the unit was in when the evidence was seen, for a map with `modes` (see Modes) |
 | `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
 | `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
 | `note` | no | for the reviewer; never shown to the chat model |
@@ -82,7 +82,7 @@ map-check record about the same entry use the same name.
 | --- | --- | --- |
 | `<message>` | a message | `/messages/<message>`, `/firmwares/<fw>/messages/<message>` |
 | `<message>/<block>` | a message on one block; marks only | (none: edits go to the message) |
-| `<message>@<mode>`, `<message>@<mode>/<block>` | a message as a mode that stands in layouts or enums reads it | as for `<message>` (no whole-section home) |
+| `<message>@<mode>`, `<message>@<mode>/<block>` | a message as a mode that stands in layouts or enums reads it; marks only | (none: edits go to the message, or to the mode's own entries) |
 | `param/<block>/<id>` | a block parameter by id, in a group that stands in for none | `/parameters/groups/*/params/*` |
 | `param/<block>/<id>/<group>` | a block parameter in a group that stands in for another in some mode (`modes.use.<mode>.groups`) | `/parameters/groups/<group>/params/*` |
 | `choice/<name>` | a choice | `/choices/<name>` |
@@ -121,6 +121,23 @@ in the same table; `checkSeedPatch` has no map, so this check happens only when 
 
 A firmware delta's message, layout or constant replaces the base one whole for that firmware, as the app's engine
 reads it (map-checks.md, "Fingerprints"); it is not merged into the base one.
+
+## Modes
+
+A map with `modes` keeps some entries apart per mode (closed-repo map checks, draft PR 93). A change says which mode
+the unit was in when its evidence was seen (`mode`), and when a patch is applied that mode is checked against the map
+as the reviewer saw it:
+
+- an `@<mode>` entry needs a change seen in that mode, and a mode the map uses; it only marks, because an edit would
+  change the message every mode shares on one mode's evidence. A fix goes to the message itself, or to the mode's
+  own entries (`modes`, `layout/<name>`, `enum/<name>`);
+- a grouped parameter (`param/<block>/<id>/<group>`) needs a mode whose `groups` stand that group in;
+- a plain entry seen in a mode where another entry stands in for it (`modes.use.<mode>.messages` or `.groups`) is
+  `refused`, since the evidence is about the stand-in;
+- a mode the map doesn't use is `refused`.
+
+Which groups stand in is read from the map before the patch, so a `modes` change earlier in a patch doesn't change
+what later entries in it mean.
 
 ## Ops
 

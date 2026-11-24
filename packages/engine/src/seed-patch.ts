@@ -409,7 +409,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (!isEdit && c.ops) add(".ops", `${c.action} marks the entry and carries no ops`);
     if (c.action === "add" && c.entryFp) add(".entryFp", "add is for an entry the base map lacks, but entryFp says it has one");
     if ((c.action === "repair" || c.action === "remove" || c.action === "confirm" || c.action === "suspect") && c.entryFp === null) add(".entryFp", `${c.action} needs an entry the base map has`);
-    if (entry.kind === "message" && entry.block !== undefined && isEdit) add(".entry", "edits go to the message; a message on one block is for marks");
+    if (entry.kind === "message" && (entry.block !== undefined || entry.mode !== undefined) && isEdit)
+      add(".entry", "edits go to the message itself, or to the mode's own entries (modes, layout/, enum/); a message on one block or in one mode is for marks");
 
     const homes = entryHomes(entry);
     const opSegs = (c.ops ?? []).map((op) => splitPointer(op.path));
@@ -671,18 +672,18 @@ function standInGroups(doc: Json): Set<string> {
  * parameter, every parameter with its id in a group that lists its block (a stand-in group only when
  * the entry names it, as `param/<block>/<id>/<group>`); for a setting, every item with its id.
  */
-export function entryPaths(map: unknown, entry: string, fw: string): string[][] {
+export function entryPaths(map: unknown, entry: string, fw: string, standIns?: ReadonlySet<string>): string[][] {
   const e = parseEntry(entry);
   if (!e || !isObject(map)) return [];
   const doc = map as Json;
   const out: string[][] = [];
   if (e.kind === "param") {
     const groups = at(doc, ["parameters", "groups"]);
-    const standIns = standInGroups(doc);
+    const stand = standIns ?? standInGroups(doc);
     if (isObject(groups))
       for (const [g, grp] of Object.entries(groups)) {
         // a plain entry is in a group that stands in for none; one with a group, in that stand-in group
-        if (e.group === undefined ? standIns.has(g) : g !== e.group || !standIns.has(g)) continue;
+        if (e.group === undefined ? stand.has(g) : g !== e.group || !stand.has(g)) continue;
         if (!isObject(grp) || !Array.isArray(grp.blocks) || !grp.blocks.includes(e.block) || !isObject(grp.params)) continue;
         for (const [k, x] of Object.entries(grp.params)) if (isObject(x) && x.id === e.id) out.push(["parameters", "groups", g, "params", k]);
       }
@@ -731,6 +732,38 @@ function unsafeProbe(messages: Record<string, Json>, c: Change): string | null {
 }
 
 /**
+ * Why a change's mode doesn't fit the map: an `@<mode>` entry or a grouped parameter needs a mode the map uses, and a
+ * grouped parameter's group must stand in for another in that mode; a plain entry seen in a mode where another entry
+ * stands in for it is evidence about the stand-in, not about it.
+ */
+function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: string | undefined): string | null {
+  const modeOf = (m: string) => (isObject(use) && Object.hasOwn(use, m) && isObject(use[m]) ? (use[m] as Record<string, Json>) : undefined);
+  const standsIn = (u: Record<string, Json> | undefined, kind: string, name: string) => {
+    const t = u?.[kind];
+    return isObject(t) && Object.hasOwn(t, name) && t[name] !== name ? t[name] : undefined;
+  };
+  if (e?.kind === "message" && e.mode !== undefined) return modeOf(e.mode) ? null : `the map has no mode ${e.mode}`;
+  if (e?.kind === "param" && e.group !== undefined) {
+    const u = mode === undefined ? undefined : modeOf(mode);
+    if (!u) return `a parameter of the stand-in group ${e.group} needs the mode it was seen in, one the map uses`;
+    const g = u.groups;
+    return isObject(g) && Object.values(g).includes(e.group) ? null : `group ${e.group} stands in for none in mode ${mode}`;
+  }
+  if (mode === undefined || !e) return null;
+  const u = modeOf(mode);
+  if (!u) return isObject(use) ? `the map has no mode ${mode}` : null;
+  if (e.kind === "message" && standsIn(u, "messages", e.message) !== undefined) return `in mode ${mode}, ${String(standsIn(u, "messages", e.message))} stands in for ${e.message}`;
+  if (e.kind === "param") {
+    const groups = at(doc, ["parameters", "groups"]);
+    if (isObject(groups))
+      for (const [g, grp] of Object.entries(groups))
+        if (isObject(grp) && Array.isArray(grp.blocks) && grp.blocks.includes(e.block) && standsIn(u, "groups", g) !== undefined)
+          return `in mode ${mode}, ${String(standsIn(u, "groups", g))} stands in for group ${g}`;
+  }
+  return null;
+}
+
+/**
  * Apply a checked patch to a copy of the map, change by change, each all or nothing. `accept` limits it to the
  * changes a review accepted. A change whose ops no longer fit (a `was` that doesn't match) is left out as stale,
  * so a patch made against an older map still lands wherever its entries are unchanged. A change is refused when its
@@ -742,6 +775,9 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
   const fw = p.unit.firmware;
   // from the input map, which is never changed: doc's messages change as the changes land
   const probed = messagesFor(map as Json, fw);
+  // which groups stand in is read from the map as the reviewer saw it, not as earlier changes leave it
+  const standIns = standInGroups(map as Json);
+  const modeUse = at(map as Json, ["modes", "use"]);
   const rebased = fingerprint(map) !== p.base.file;
   const refused = (c: Change, why: string): ChangeResult => ({ change: c.id, status: "refused", why });
   const results: ChangeResult[] = p.changes.map((c) => {
@@ -750,7 +786,9 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     if (probe) return refused(c, probe);
     const e = parseEntry(c.entry);
     const kind = e?.kind;
-    const before = entryPaths(doc, c.entry, fw);
+    const before = entryPaths(doc, c.entry, fw, standIns);
+    const wrongMode = modeIssue(modeUse, doc, e, c.mode);
+    if (wrongMode) return refused(c, wrongMode);
     // a bare name is the message or the top-level section, never both: in the map, or once the ops have run; an entry
     // with a block or a mode never covers the section, so a top-level key of its message's name counts on its own
     if (e?.kind === "message") {
@@ -773,7 +811,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
         return { change: c.id, status: "stale", why };
       }
     }
-    const after = entryPaths(doc, c.entry, fw);
+    const after = entryPaths(doc, c.entry, fw, standIns);
     const why =
       c.action === "remove" ? (after.length ? "the entry is still there" : null) : !after.length ? "the entry isn't there after the ops" : null;
     // a parameter or setting is found by its id, so its ops must land on that one, not another in the same table
