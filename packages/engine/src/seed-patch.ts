@@ -52,11 +52,13 @@ export const FINE_SECTIONS = ["messages", "layouts", "enums", "constants", "choi
 export const NAMED_KINDS = ["choice", "layout", "enum", "constant", "control"] as const;
 /** A draft's own bookkeeping at its top level, which no op writes. */
 const BOOKKEEPING = new Set(["status", "gaps", "provenance"]);
+/** Top-level keys no entry names whole, and no measured value lies in. */
+const RESERVED_TOP = new Set<string>([...FINE_SECTIONS, ...BOOKKEEPING]);
 /**
  * Words that never name a message, since they name a section or start another kind of entry (parseEntry never reads
  * them as one). A map's messages also never share a name with any of its own top-level keys.
  */
-export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...FINE_SECTIONS, ...NAMED_KINDS, ...BOOKKEEPING, "param", "setting", "measured"];
+export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...RESERVED_TOP, ...NAMED_KINDS, "param", "setting", "measured"];
 
 export type Entry =
   /** a message, or a top-level section this engine doesn't know by that name, whichever the map has */
@@ -80,8 +82,10 @@ export function parseEntry(entry: string): Entry | null {
   if (entry.length > 160) return null;
   const parts = entry.split("/");
   const [head, a, b] = parts;
-  if (head === "measured") return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) ? { kind: "measured", field: a } : null;
-  if ((FINE_SECTIONS as readonly string[]).includes(head) || BOOKKEEPING.has(head)) return null;
+  // never in a section only finer entries cover (another firmware's delta, a message) or in a draft's bookkeeping
+  if (head === "measured")
+    return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) && !RESERVED_TOP.has(a.split(".")[0]) ? { kind: "measured", field: a } : null;
+  if (RESERVED_TOP.has(head)) return null;
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
   if (head === "setting") return parts.length === 2 && KEY_RE.test(a) ? { kind: "setting", id: a } : null;
@@ -505,7 +509,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
-      if (segs[0] === "transport" && !measured) reasons.add("changes the framing of every message");
+      if ((segs[0] === "transport" || segs[0] === "addresses") && !measured) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
@@ -696,7 +700,11 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     if (probe) return refused(c, probe);
     const kind = parseEntry(c.entry)?.kind;
     const before = entryPaths(doc, c.entry, fw);
-    if (kind === "message" && before.some((h) => h.length === 1) && before.some((h) => h.length > 1)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
+    // a bare name is the message or the top-level section, never both: in the map, or once the ops have run
+    if (kind === "message") {
+      const top = [...before.map((h) => h.length === 1), ...(c.ops ?? []).map((op) => splitPointer(op.path)[0] === c.entry)];
+      if (top.includes(true) && top.includes(false)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
+    }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
       return { change: c.id, status: "marked" };

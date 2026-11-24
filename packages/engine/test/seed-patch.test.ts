@@ -325,7 +325,7 @@ test("a repair may open the unit's own firmware delta", () => {
 test("every top-level key is an entry: known sections, a draft's own sections, measured values", () => {
   assert.deepEqual(parseEntry("addresses"), { kind: "section", section: "addresses" });
   assert.deepEqual(parseEntry("measured/transport.timing.compareToggle"), { kind: "measured", field: "transport.timing.compareToggle" });
-  for (const bad of ["messages", "layouts", "firmwares", "schema", "status", "gaps", "provenance", "measured", "measured/audio", "measured/Audio.x"]) assert.equal(parseEntry(bad), null, bad);
+  for (const bad of ["messages", "layouts", "firmwares", "schema", "status", "gaps", "provenance", "measured", "measured/audio", "measured/Audio.x", "measured/firmwares.v2.transport.x", "measured/messages.getPreset.cmd", "measured/status.x"]) assert.equal(parseEntry(bad), null, bad);
 
   // a draft's own section, by its key alone
   const map = { ...seed(), addressMap: { patch: "10 00" } };
@@ -339,6 +339,11 @@ test("every top-level key is an entry: known sections, a draft's own sections, m
   // a name that is both a message and a top-level section can't be told apart
   const both = { ...map, messages: { ...map.messages, addressMap: { cmd: "50", dir: "request" } } };
   assert.match(applySeedPatch(both, p).results[0].why!, /both a message and a top-level section/);
+  // nor can a change make a name both
+  const newMsg: Change = { id: "c", entry: "fooBar", action: "add", source: "wire", ops: [{ op: "add", path: "/messages/fooBar", value: { cmd: "50", dir: "request" } }, { op: "add", path: "/fooBar", value: {} }], evidence: [capture] };
+  assert.match(applySeedPatch(seed(), withChanges(newMsg)).results[0].why!, /both a message and a top-level section/);
+  const sectionThere = { ...seed(), fooBar: {} };
+  assert.match(applySeedPatch(sectionThere, withChanges({ ...newMsg, ops: [newMsg.ops![0]] })).results[0].why!, /both a message and a top-level section/);
   // whole sections with a firmware delta are not ambiguous
   const safety = { ...seed(), safety: { rules: [] }, firmwares: { "1.20": { safety: { modelChangeScenes: [1] } } } };
   const confirmSafety: Change = { id: "c", entry: "safety", action: "confirm", source: "doc", evidence: [{ kind: "doc", citation: "manual" }] };
@@ -349,4 +354,8 @@ test("every top-level key is an entry: known sections, a draft's own sections, m
   assert.deepEqual(messages(withChanges(measured)), []);
   assert.equal(applySeedPatch(seed(), withChanges(measured)).results[0].status, "applied");
   assert.match(messages(withChanges({ ...measured, ops: [{ op: "add", path: "/transport/timing/frameGapMs", value: 1 }] }))[0], /outside entry/);
+  // addresses frame every message, like the transport
+  const addresses = { ...seed(), addresses: { patch: "10 00" } };
+  const readdress: Change = { id: "c", entry: "addresses", action: "repair", source: "wire", ops: [{ op: "replace", path: "/addresses/patch", value: "11 00", was: fingerprint("10 00") }], evidence: [capture] };
+  assert.deepEqual(reviewReasons(withChanges(readdress), addresses).map((r) => r.reason), ["changes the framing of every message"]);
 });
