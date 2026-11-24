@@ -359,3 +359,14 @@ test("every top-level key is an entry: known sections, a draft's own sections, m
   const readdress: Change = { id: "c", entry: "addresses", action: "repair", source: "wire", ops: [{ op: "replace", path: "/addresses/patch", value: "11 00", was: fingerprint("10 00") }], evidence: [capture] };
   assert.deepEqual(reviewReasons(withChanges(readdress), addresses).map((r) => r.reason), ["changes the framing of every message"]);
 });
+
+test("a measured value skips the framing review only when it is a measured value", () => {
+  const timing = { value: 420, unit: "ms", measuredOn: "acme fx-1", date: "2026-11-24", source: "sniffer-capture" };
+  const add = (field: string, value: Record<string, string | number>): Change => ({ id: "c", entry: `measured/${field}`, action: "add", source: "wire", ops: [{ op: "add", path: `/${field.split(".").join("/")}`, value }], evidence: [capture] });
+  const reasons = (c: Change) => reviewReasons(withChanges(c), seed()).map((r) => r.reason);
+  assert.deepEqual(reasons(add("transport.timing.compareToggle", timing)), []);
+  assert.deepEqual(reasons(add("transport.checksum", { algo: "none" } as Record<string, string>)), ["changes the framing of every message"]);
+  const header: Change = { id: "c", entry: "measured/transport.frame", action: "repair", source: "wire", ops: [{ op: "replace", path: "/transport/frame", value: timing, was: fingerprint(seed().transport.frame) }], evidence: [capture] };
+  assert.deepEqual(reasons(header), ["changes the framing of every message"], "replacing framing with a measured shape still takes the framing out");
+  assert.equal(parseEntry("measured/draftThing.x"), null, "a measured value lies in a known section");
+});

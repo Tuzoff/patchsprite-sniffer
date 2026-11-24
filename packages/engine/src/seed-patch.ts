@@ -84,7 +84,7 @@ export function parseEntry(entry: string): Entry | null {
   const [head, a, b] = parts;
   // never in a section only finer entries cover (another firmware's delta, a message) or in a draft's bookkeeping
   if (head === "measured")
-    return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) && !RESERVED_TOP.has(a.split(".")[0]) ? { kind: "measured", field: a } : null;
+    return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) && (SECTION_ENTRIES as readonly string[]).includes(a.split(".")[0]) ? { kind: "measured", field: a } : null;
   if (RESERVED_TOP.has(head)) return null;
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
@@ -488,6 +488,10 @@ const makesSend = (v: unknown, last: string | undefined): boolean => (last === "
  * can't talk its way past review. A replace or remove is judged by what it takes out of the base map as well as what
  * it puts in, so dropping a limit by replacing its parent still counts. `base` is the map the patch is applied to.
  */
+/** A measured value's shape: {value, unit, measuredOn, date, source} and nothing else. */
+const isMeasured = (v: unknown): boolean =>
+  isObject(v) && typeof v.value === "number" && Object.keys(v).every((k) => ["value", "unit", "measuredOn", "date", "source"].includes(k));
+
 export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
   for (const c of p.changes) {
@@ -509,7 +513,9 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
-      if ((segs[0] === "transport" || segs[0] === "addresses") && !measured) reasons.add("changes the framing of every message");
+      // a measured value is only a timing: framing is reviewed unless both what goes in and what comes out are measured values
+      const onlyTiming = measured && ("value" in op ? isMeasured(op.value) : true) && (old === undefined || isMeasured(old));
+      if ((segs[0] === "transport" || segs[0] === "addresses") && !onlyTiming) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);

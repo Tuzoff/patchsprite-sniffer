@@ -88,7 +88,7 @@ map-check record about the same entry use the same name.
 | `constant/<name>` | a named constant | `/constants/<name>`, `/firmwares/<fw>/constants/<name>` |
 | `control/<name>` | a MIDI channel control | `/controls/items/<name>` |
 | `setting/<id>` | a global setting | `/settings/items/*` |
-| `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), outside the sections below that are never entries | the field's own path (`/transport/timing/compareToggle`) |
+| `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), inside one of the known sections in the next row | the field's own path (`/transport/timing/compareToggle`) |
 | `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 | `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
@@ -213,7 +213,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
   fingerprint, so only review catches them);
-- the framing (`/transport` and `/addresses`, except a `measured/...` value in them), which every message depends on;
+- the framing (`/transport` and `/addresses`), which every message depends on; a `measured/...` change in them is exempt
+  only when both what it puts in and what it takes out are measured values (`{value, unit, measuredOn, date, source}`);
 - any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
