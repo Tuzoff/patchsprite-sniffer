@@ -182,6 +182,11 @@
               "doc"
             ]
           },
+          "mode": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][A-Za-z0-9_]*$"
+          },
           "ops": {
             "minItems": 1,
             "maxItems": 64,

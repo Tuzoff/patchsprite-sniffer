@@ -44,7 +44,7 @@ const u16 = z.number().int().min(0).max(0xffff);
  */
 export const SECTION_ENTRIES = [
   "transport", "host", "identity", "driver", "session", "safety", "blocked", "hazards", "scratch", "audio", "display",
-  "parameters", "controls", "settings", "eq", "addresses", "editor",
+  "parameters", "controls", "settings", "eq", "addresses", "editor", "modes",
 ] as const;
 /** Top-level keys only ever covered by finer entries (`<message>`, `layout/<name>` and so on), never whole. */
 export const FINE_SECTIONS = ["messages", "layouts", "enums", "constants", "choices", "firmwares", "schema"] as const;
@@ -61,11 +61,15 @@ const RESERVED_TOP = new Set<string>([...FINE_SECTIONS, ...BOOKKEEPING]);
 export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...RESERVED_TOP, ...NAMED_KINDS, "param", "setting", "measured", "linked"];
 
 export type Entry =
-  /** a message, or a top-level section this engine doesn't know by that name, whichever the map has */
-  | { kind: "message"; message: string; block?: string }
+  /**
+   * a message, or a top-level section this engine doesn't know by that name, whichever the map has; with a mode
+   * (`getPreset@bass`), the message as a mode that stands in layouts or enums reads it
+   */
+  | { kind: "message"; message: string; block?: string; mode?: string }
   /** a measured value, by its dotted path (`transport.timing.compareToggle`) */
   | { kind: "measured"; field: string }
-  | { kind: "param"; block: string; id: number }
+  /** with a group (`param/amp/3/bassAmp`), the parameter in a group that stands in for another in some mode */
+  | { kind: "param"; block: string; id: number; group?: string }
   /** a set of paired parameters in a parameter group (`linked/<group>/<set>`) */
   | { kind: "linked"; group: string; set: string }
   | { kind: "setting"; id: string }
@@ -92,10 +96,19 @@ export function parseEntry(entry: string): Entry | null {
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
   if (head === "setting") return parts.length === 2 && KEY_RE.test(a) ? { kind: "setting", id: a } : null;
-  if (head === "param") return parts.length === 3 && BLOCK_RE.test(a) && /^(0|[1-9]\d{0,4})$/.test(b) ? { kind: "param", block: a, id: Number(b) } : null;
-  if (!NAME_RE.test(head) || head.length > 64) return null;
-  if (parts.length === 1) return { kind: "message", message: head };
-  return parts.length === 2 && BLOCK_RE.test(a) && a.length <= 64 ? { kind: "message", message: head, block: a } : null;
+  if (head === "param") {
+    if ((parts.length !== 3 && parts.length !== 4) || !BLOCK_RE.test(a) || !/^(0|[1-9]\d{0,4})$/.test(b)) return null;
+    if (parts.length === 3) return { kind: "param", block: a, id: Number(b) };
+    return KEY_RE.test(parts[3]) || NAME_RE.test(parts[3]) ? { kind: "param", block: a, id: Number(b), group: parts[3] } : null;
+  }
+  // `<message>@<mode>`, `<message>@<mode>/<block>`
+  const [message, mode, ...more] = head.split("@");
+  if (more.length || (mode !== undefined && (!BLOCK_RE.test(mode) || mode.length > 64))) return null;
+  if (!NAME_RE.test(message) || message.length > 64) return null;
+  if (mode !== undefined && (SECTION_ENTRIES as readonly string[]).includes(message)) return null;
+  const tagged = mode === undefined ? {} : { mode };
+  if (parts.length === 1) return { kind: "message", message, ...tagged };
+  return parts.length === 2 && BLOCK_RE.test(a) && a.length <= 64 ? { kind: "message", message, block: a, ...tagged } : null;
 }
 
 const FW = "$fw";
@@ -109,13 +122,13 @@ export function entryHomes(e: Entry): string[][] {
   switch (e.kind) {
     case "message":
       // a bare name is also a top-level section this engine doesn't know (a draft's own, or a newer map's)
-      return [["messages", e.message], ["firmwares", FW, "messages", e.message], ...(e.block === undefined ? [[e.message]] : [])];
+      return [["messages", e.message], ["firmwares", FW, "messages", e.message], ...(e.block === undefined && e.mode === undefined ? [[e.message]] : [])];
     case "measured":
       return [e.field.split(".")];
     case "linked":
       return [["parameters", "groups", e.group, "linked", e.set]];
     case "param":
-      return [["parameters", "groups", "*", "params", "*"]];
+      return [["parameters", "groups", e.group ?? "*", "params", "*"]];
     case "setting":
       return [["settings", "items", "*"]];
     case "choice":
@@ -296,6 +309,8 @@ export const ChangeSchema = z.strictObject({
   /** the entry's map-check fingerprint in the base map, null when the base has no such entry; only when the base loads */
   entryFp: fp16.nullable().optional(),
   source: z.enum(SOURCES).optional(),
+  /** the mode the unit was in when the evidence was seen, for a map with modes; an `@<mode>` entry needs its own */
+  mode: z.string().max(64).regex(/^[a-z][A-Za-z0-9_]*$/).optional(),
   ops: z.array(OpSchema).min(1).max(MAX_OPS).optional(),
   evidence: z.array(EvidenceSchema).min(1).max(MAX_EVIDENCE),
   /** for the reviewer, never shown to the chat model */
@@ -381,6 +396,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (entries.has(c.entry)) add(".entry", `entry "${c.entry}" has two changes; one change per entry`);
     entries.add(c.entry);
     const entry = parseEntry(c.entry)!;
+    if (entry.kind === "message" && entry.mode !== undefined && c.mode !== entry.mode)
+      add(".mode", `${c.entry} is the message as mode ${entry.mode} reads it, so its evidence must be seen in that mode`);
 
     const isEdit = EDITS.includes(c.action);
     if (isEdit && !c.ops) add(".ops", `${c.action} needs ops`);
@@ -522,6 +539,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const onlyTiming = measured && ("value" in op ? isMeasured(op.value) : true) && (old === undefined || isMeasured(old));
       if ((segs[0] === "transport" || segs[0] === "addresses") && !onlyTiming) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
+      if (segs[0] === "modes") reasons.add("changes which entries a mode uses");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
       if (("value" in op && makesSend(op.value, last) && !makesSend(old, last)) || (op.op === "add" && segs[0] === "controls" && segs.length <= 3))
@@ -631,9 +649,22 @@ function applyOp(doc: Json, op: Op, undo: Undo, landed: string[][]): string | nu
   return null;
 }
 
+/** The parameter groups that stand in for another in some mode (`modes.use.<mode>.groups`). */
+function standInGroups(doc: Json): Set<string> {
+  const out = new Set<string>();
+  const use = at(doc, ["modes", "use"]);
+  if (isObject(use))
+    for (const u of Object.values(use)) {
+      const g = isObject(u) ? u.groups : undefined;
+      if (isObject(g)) for (const v of Object.values(g)) if (typeof v === "string") out.add(v);
+    }
+  return out;
+}
+
 /**
  * Where an entry is in a map for a firmware, as concrete paths: its delta's and the base's homes that exist; for a
- * parameter, every parameter with its id in a group that lists its block; for a setting, every item with its id.
+ * parameter, every parameter with its id in a group that lists its block (a stand-in group only when
+ * the entry names it, as `param/<block>/<id>/<group>`); for a setting, every item with its id.
  */
 export function entryPaths(map: unknown, entry: string, fw: string): string[][] {
   const e = parseEntry(entry);
@@ -642,8 +673,11 @@ export function entryPaths(map: unknown, entry: string, fw: string): string[][] 
   const out: string[][] = [];
   if (e.kind === "param") {
     const groups = at(doc, ["parameters", "groups"]);
+    const standIns = standInGroups(doc);
     if (isObject(groups))
       for (const [g, grp] of Object.entries(groups)) {
+        // a plain entry is in a group that stands in for none; one with a group, in that stand-in group
+        if (e.group === undefined ? standIns.has(g) : g !== e.group || !standIns.has(g)) continue;
         if (!isObject(grp) || !Array.isArray(grp.blocks) || !grp.blocks.includes(e.block) || !isObject(grp.params)) continue;
         for (const [k, x] of Object.entries(grp.params)) if (isObject(x) && x.id === e.id) out.push(["parameters", "groups", g, "params", k]);
       }

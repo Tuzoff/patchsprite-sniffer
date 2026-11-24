@@ -54,6 +54,7 @@ Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f
 | `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
 | `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry, so only for `add` and `block`); only when the seed loads |
 | `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
+| `mode` | for an `@<mode>` entry | the mode the unit was in when the evidence was seen, for a map with `modes`; an `@<mode>` entry needs that same mode, so one mode's evidence never marks another mode's entry |
 | `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
 | `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
 | `note` | no | for the reviewer; never shown to the chat model |
@@ -81,7 +82,9 @@ map-check record about the same entry use the same name.
 | --- | --- | --- |
 | `<message>` | a message | `/messages/<message>`, `/firmwares/<fw>/messages/<message>` |
 | `<message>/<block>` | a message on one block; marks only | (none: edits go to the message) |
-| `param/<block>/<id>` | a block parameter by id | `/parameters/groups/*/params/*` |
+| `<message>@<mode>`, `<message>@<mode>/<block>` | a message as a mode that stands in layouts or enums reads it | as for `<message>` (no whole-section home) |
+| `param/<block>/<id>` | a block parameter by id, in a group that stands in for none | `/parameters/groups/*/params/*` |
+| `param/<block>/<id>/<group>` | a block parameter in a group that stands in for another in some mode (`modes.use.<mode>.groups`) | `/parameters/groups/<group>/params/*` |
 | `choice/<name>` | a choice | `/choices/<name>` |
 | `layout/<name>` | a shared layout | `/layouts/<name>`, `/firmwares/<fw>/layouts/<name>` |
 | `enum/<name>` | an enum | `/enums/<name>` |
@@ -90,7 +93,7 @@ map-check record about the same entry use the same name.
 | `setting/<id>` | a global setting | `/settings/items/*` |
 | `linked/<group>/<set>` | a set of paired parameters in a parameter group | `/parameters/groups/<group>/linked/<set>` |
 | `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), inside one of the known sections in the next row | the field's own path (`/transport/timing/compareToggle`) |
-| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor` | that whole section | `/<section>` |
+| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor`, `modes` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 | `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
 
@@ -100,7 +103,8 @@ name (`^[a-z][A-Za-z0-9]*$`, at most 64 characters) and not a word that starts a
 only ever covered by finer entries (`messages`, `layouts`, `enums`, `constants`, `choices`, `firmwares`, `schema`) and
 a draft's own bookkeeping (`status`, `gaps`, `provenance`), which are never entries. `identity` is the proposed key for
 the unit's identity reply, `session` for what is sent when a port opens (`onConnect`), `hazards` for the seed's hazard
-list and `addresses` for address-based framings. The whole `parameters` section covers a parameter group that doesn't
+list, `addresses` for address-based framings and `modes` for modes whose entries live apart (the mode and
+grouped-parameter forms follow the app's map-check names for modes). The whole `parameters` section covers a parameter group that doesn't
 say which blocks it serves, and the whole `controls` section covers the channel and preset settings outside
 `controls.items`.
 
@@ -219,6 +223,7 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   only when both what it puts in and what it takes out are measured values (`{value, unit, measuredOn, date, source}`);
 - any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
+- `/modes`, which decides which entries each mode reads and writes through;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
 - anything new that writes to the unit: a value that makes a message's `dir` `send` where it wasn't, or a new

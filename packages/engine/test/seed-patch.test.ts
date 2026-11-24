@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { schemaFiles } from "../../../scripts/schemas.ts";
 import { fingerprint } from "../src/canonical-json.ts";
-import { MAX_PATCH_BYTES, applySeedPatch, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
+import { MAX_PATCH_BYTES, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
 
 const fixture = (name: string) => readFileSync(new URL(`../../../test/fixtures/seed-patch/${name}`, import.meta.url), "utf8");
 const seed = () => JSON.parse(fixture("acme-fx-1.seed.json"));
@@ -379,4 +379,33 @@ test("a linked parameter set is an entry in its group", () => {
   assert.equal(applySeedPatch(seed(), withChanges(add)).results[0].status, "applied");
   assert.match(messages(withChanges({ ...add, ops: [{ op: "add", path: "/parameters/groups/drive/linked/gain_pair", value: {} }] }))[0], /outside entry/);
   assert.deepEqual(reviewReasons(withChanges(add), seed()).map((r) => r.reason), ["changes what may be written"], "a linked set limits the values written together");
+});
+
+test("modes: a message as a mode reads it, a stand-in group's parameter, and the mode a change was seen in", () => {
+  assert.deepEqual(parseEntry("getPreset@bass"), { kind: "message", message: "getPreset", mode: "bass" });
+  assert.deepEqual(parseEntry("setBypass@bass/amp"), { kind: "message", message: "setBypass", block: "amp", mode: "bass" });
+  assert.deepEqual(parseEntry("param/amp/1/bass_amp"), { kind: "param", block: "amp", id: 1, group: "bass_amp" });
+  assert.deepEqual(parseEntry("modes"), { kind: "section", section: "modes" });
+  for (const bad of ["getPreset@", "getPreset@a@b", "@bass", "transport@bass", "param/amp/1/x/y", "param/amp/1/Bad-group"]) assert.equal(parseEntry(bad), null, bad);
+
+  const confirm: Change = { id: "c", entry: "getPreset@bass", action: "confirm", source: "read-back", evidence: [probeOk] };
+  assert.match(messages(withChanges(confirm))[0], /must be seen in that mode/);
+  assert.match(messages(withChanges({ ...confirm, mode: "guitar" }))[0], /must be seen in that mode/);
+  assert.deepEqual(messages(withChanges({ ...confirm, mode: "bass" })), []);
+
+  // a map with a bass mode whose amp group stands in for the guitar one
+  const map = seed();
+  map.parameters.groups.bass_amp = { blocks: ["amp"], params: { gain: { id: 1, kind: "knob" } } };
+  map.modes = { read: { message: "getMode", field: "mode" }, use: { bass: { groups: { amp: "bass_amp" } } } };
+  const fw = example().unit.firmware;
+  assert.deepEqual(entryPaths(map, "param/amp/1", fw), [["parameters", "groups", "amp", "params", "gain"]]);
+  assert.deepEqual(entryPaths(map, "param/amp/1/bass_amp", fw), [["parameters", "groups", "bass_amp", "params", "gain"]]);
+  assert.deepEqual(entryPaths(map, "param/amp/1/amp", fw), [], "the fourth part names a stand-in group");
+  const wrongGroup: Change = { id: "c", entry: "param/amp/1/bass_amp", action: "repair", source: "wire", mode: "bass", ops: [{ op: "replace", path: "/parameters/groups/amp/params/gain/kind", value: "slider", was: fingerprint("knob") }], evidence: [capture] };
+  assert.match(messages(withChanges(wrongGroup))[0], /outside entry/);
+  const rightGroup: Change = { ...wrongGroup, ops: [{ op: "replace", path: "/parameters/groups/bass_amp/params/gain/kind", value: "slider", was: fingerprint("knob") }] };
+  assert.equal(applySeedPatch(map, withChanges(rightGroup)).results[0].status, "applied");
+
+  const modes: Change = { id: "c", entry: "modes", action: "repair", source: "wire", ops: [{ op: "replace", path: "/modes/use/bass/groups/amp", value: "amp", was: fingerprint("bass_amp") }], evidence: [capture] };
+  assert.deepEqual(reviewReasons(withChanges(modes), map).map((r) => r.reason), ["changes which entries a mode uses"]);
 });
