@@ -28,7 +28,10 @@ const fp16 = z.string().regex(/^[0-9a-f]{16}$/, "a fingerprint is 16 lowercase h
 const hexBytes = z.string().max(MAX_FRAME_CHARS).regex(/^[0-9a-f]{2}( [0-9a-f]{2})*$/, "bytes are lowercase hex pairs separated by single spaces");
 const time = z.iso.datetime({ offset: true });
 const text = z.string().min(1).max(MAX_TEXT);
-const name = z.string().max(64).regex(/^[a-z][A-Za-z0-9]*$/, "names are camelCase");
+const NAME_RE = /^[a-z][A-Za-z0-9]*$/;
+/** An array index in a JSON Pointer segment. */
+const INDEX_RE = /^(0|[1-9]\d*)$/;
+const name = z.string().max(64).regex(NAME_RE, "names are camelCase");
 const firmware = z.string().max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const sourceId = z.string().max(64).regex(/^[a-z0-9][a-z0-9-]*$/, "source ids are lowercase letters, digits and dashes");
 const u16 = z.number().int().min(0).max(0xffff);
@@ -49,7 +52,6 @@ export type Entry =
   | { kind: (typeof NAMED_KINDS)[number]; name: string }
   | { kind: "section"; section: (typeof SECTION_ENTRIES)[number] };
 
-const NAME_RE = /^[a-z][A-Za-z0-9]*$/;
 const BLOCK_RE = /^[a-z][A-Za-z0-9_]*$/;
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
 
@@ -113,12 +115,37 @@ export const splitPointer = (p: string): string[] => p.slice(1).split("/").map((
 const underHome = (segs: string[], home: string[], fw: string) =>
   segs.length >= home.length && home.every((h, i) => h === "*" || (h === FW ? segs[i] === fw : segs[i] === h));
 
-/** One path is the other or lies inside it. */
-const overlaps = (a: string[], b: string[]) => {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
-  return true;
-};
+/**
+ * The op paths of earlier changes as a tree of segments, so finding an overlap costs one walk down a path, not a
+ * comparison with every other op: `at` is the first change with an op at the node, `below` the first with one under it.
+ */
+interface PathNode {
+  kids: Map<string, PathNode>;
+  at?: number;
+  below?: number;
+}
+
+/** The first earlier change with an op path that is this one, lies inside it or holds it. */
+function overlapIn(root: PathNode, segs: readonly string[]): number | undefined {
+  let n: PathNode | undefined = root;
+  for (const s of segs) {
+    if (n.at !== undefined) return n.at;
+    n = n.kids.get(s);
+    if (!n) return undefined;
+  }
+  return n.at ?? n.below;
+}
+
+function addPath(root: PathNode, segs: readonly string[], change: number): void {
+  let n = root;
+  for (const s of segs) {
+    n.below ??= change;
+    let kid = n.kids.get(s);
+    if (!kid) n.kids.set(s, (kid = { kids: new Map() }));
+    n = kid;
+  }
+  n.at ??= change;
+}
 
 // ---- the schema -----------------------------------------------------------------------------------------------------
 
@@ -311,7 +338,7 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
   const issues: Issue[] = [];
   const ids = new Set<string>();
   const entries = new Set<string>();
-  const edited: { change: number; segs: string[] }[] = [];
+  const edited: PathNode = { kids: new Map() };
   p.changes.forEach((c, i) => {
     const at = `changes[${i}]`;
     const add = (where: string, message: string) => issues.push({ at: `${at}${where}`, message });
@@ -329,15 +356,17 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (entry.kind === "message" && entry.block !== undefined && isEdit) add(".entry", "edits go to the message; a message on one block is for marks");
 
     const homes = entryHomes(entry);
+    const opSegs = (c.ops ?? []).map((op) => splitPointer(op.path));
     c.ops?.forEach((op, j) => {
-      const segs = splitPointer(op.path);
+      const segs = opSegs[j];
       if (!homes.some((h) => underHome(segs, h, p.unit.firmware))) add(`.ops[${j}].path`, `${op.path} is outside entry ${c.entry} (or in another firmware's delta)`);
       if (c.action === "add" && op.op !== "add") add(`.ops[${j}].op`, "an add only adds");
       if (c.action === "remove" && op.op !== "remove") add(`.ops[${j}].op`, "a remove only removes");
-      if (op.op === "add" && /^(0|[1-9]\d*)$/.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
-      for (const o of edited) if (o.change !== i && overlaps(o.segs, segs)) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${o.change}]`);
+      if (op.op === "add" && INDEX_RE.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
+      const other = overlapIn(edited, segs);
+      if (other !== undefined) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${other}]`);
     });
-    for (const op of c.ops ?? []) edited.push({ change: i, segs: splitPointer(op.path) });
+    for (const segs of opSegs) addPath(edited, segs, i);
 
     if (c.action === "confirm" || c.action === "repair" || c.action === "add") {
       if (!c.source) add(".source", `${c.action} states the source its evidence gives the entry`);
@@ -358,7 +387,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
 export function parseSeedPatch(input: string | unknown): { ok: true; patch: SeedPatch } | { ok: false; issues: Issue[] } {
   let json = input;
   if (typeof input === "string") {
-    if (new TextEncoder().encode(input).length > MAX_PATCH_BYTES) return { ok: false, issues: [{ at: "", message: `a patch is at most ${MAX_PATCH_BYTES} bytes` }] };
+    // a UTF-16 unit is at least one UTF-8 byte, so a long string is too big before it is encoded
+    if (input.length > MAX_PATCH_BYTES || new TextEncoder().encode(input).length > MAX_PATCH_BYTES) return { ok: false, issues: [{ at: "", message: `a patch is at most ${MAX_PATCH_BYTES} bytes` }] };
     json = JSON.parse(input);
   }
   const r = SeedPatchSchema.safeParse(json);
@@ -433,10 +463,10 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 const isObject = (v: unknown): v is Record<string, Json> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /** The value at a path, or undefined. */
-function at(doc: Json, segs: readonly string[]): Json | undefined {
+function at(doc: Json | undefined, segs: readonly string[]): Json | undefined {
   let cur: Json | undefined = doc;
   for (const s of segs) {
-    if (Array.isArray(cur)) cur = /^(0|[1-9]\d*)$/.test(s) ? cur[Number(s)] : undefined;
+    if (Array.isArray(cur)) cur = INDEX_RE.test(s) ? cur[Number(s)] : undefined;
     else if (isObject(cur)) cur = Object.hasOwn(cur, s) ? cur[s] : undefined;
     else return undefined;
   }
@@ -447,11 +477,13 @@ function at(doc: Json, segs: readonly string[]): Json | undefined {
 function applyOp(doc: Json, op: Op): string | null {
   const segs = splitPointer(op.path);
   // an add opens the objects on its way that aren't there yet, such as the delta of a firmware the map lacks
-  if (op.op === "add")
-    for (let i = 1; i < segs.length; i++) {
-      const up = at(doc, segs.slice(0, i - 1));
-      if (isObject(up) && !Object.hasOwn(up, segs[i - 1])) up[segs[i - 1]] = {};
+  if (op.op === "add") {
+    let up: Json | undefined = doc;
+    for (const s of segs.slice(0, -1)) {
+      if (isObject(up) && !Object.hasOwn(up, s)) up[s] = {};
+      up = at(up, [s]);
     }
+  }
   const parent = at(doc, segs.slice(0, -1));
   const last = segs[segs.length - 1];
   const target = at(doc, segs);
