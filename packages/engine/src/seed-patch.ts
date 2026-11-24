@@ -108,7 +108,7 @@ export function entryHomes(e: Entry): string[][] {
 const pointer = z
   .string()
   .max(1024)
-  .regex(/^(\/([^~/]|~[01])*)+$/, "a path is a JSON Pointer below the map's root, such as /messages/getPreset");
+  .regex(/^(\/(?!__proto__(\/|$))([^~/]|~[01])*)+$/, "a path is a JSON Pointer below the map's root, such as /messages/getPreset, with no __proto__ segment");
 
 export const splitPointer = (p: string): string[] => p.slice(1).split("/").map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"));
 
@@ -144,7 +144,8 @@ function addPath(root: PathNode, segs: readonly string[], change: number): void 
     if (!kid) n.kids.set(s, (kid = { kids: new Map() }));
     n = kid;
   }
-  n.at ??= change;
+  // appends never meet: each goes to its own new place at the end of the array
+  if (segs[segs.length - 1] !== "-") n.at ??= change;
 }
 
 // ---- the schema -----------------------------------------------------------------------------------------------------
@@ -352,7 +353,7 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (isEdit && !c.ops) add(".ops", `${c.action} needs ops`);
     if (!isEdit && c.ops) add(".ops", `${c.action} marks the entry and carries no ops`);
     if (c.action === "add" && c.entryFp) add(".entryFp", "add is for an entry the base map lacks, but entryFp says it has one");
-    if ((c.action === "repair" || c.action === "remove") && c.entryFp === null) add(".entryFp", `${c.action} needs an entry the base map has`);
+    if ((c.action === "repair" || c.action === "remove" || c.action === "confirm" || c.action === "suspect") && c.entryFp === null) add(".entryFp", `${c.action} needs an entry the base map has`);
     if (entry.kind === "message" && entry.block !== undefined && isEdit) add(".entry", "edits go to the message; a message on one block is for marks");
 
     const homes = entryHomes(entry);
@@ -383,6 +384,28 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
   return issues;
 }
 
+/** How deep a patch may nest: far more than any map entry needs, and shallow enough for the recursive checks. */
+export const MAX_DEPTH = 100;
+
+/**
+ * What the schema can't safely be handed: nesting too deep for its recursive checks, or a `__proto__` key, which a
+ * parser would turn into an object's prototype, hiding the value from review and from the applied map. Iterative, so
+ * deep input can't overflow the stack.
+ */
+function rawIssue(json: unknown): string | null {
+  const stack: [unknown, number][] = [[json, 1]];
+  while (stack.length) {
+    const [v, depth] = stack.pop()!;
+    if (v === null || typeof v !== "object") continue;
+    if (depth > MAX_DEPTH) return `a patch nests at most ${MAX_DEPTH} deep`;
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "__proto__") return "no key may be __proto__";
+      stack.push([x, depth + 1]);
+    }
+  }
+  return null;
+}
+
 /** Parse and check a patch from its file text or JSON. Throws on bad JSON; otherwise returns the patch or its issues. */
 export function parseSeedPatch(input: string | unknown): { ok: true; patch: SeedPatch } | { ok: false; issues: Issue[] } {
   let json = input;
@@ -391,6 +414,8 @@ export function parseSeedPatch(input: string | unknown): { ok: true; patch: Seed
     if (input.length > MAX_PATCH_BYTES || new TextEncoder().encode(input).length > MAX_PATCH_BYTES) return { ok: false, issues: [{ at: "", message: `a patch is at most ${MAX_PATCH_BYTES} bytes` }] };
     json = JSON.parse(input);
   }
+  const raw = rawIssue(json);
+  if (raw) return { ok: false, issues: [{ at: "", message: raw }] };
   const r = SeedPatchSchema.safeParse(json);
   if (!r.success) return { ok: false, issues: r.error.issues.slice(0, 100).map((i) => ({ at: formatPath(i.path), message: i.message })) };
   const issues = checkSeedPatch(r.data);

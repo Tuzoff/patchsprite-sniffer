@@ -198,7 +198,7 @@
                     "path": {
                       "type": "string",
                       "maxLength": 1024,
-                      "pattern": "^(\\/([^~/]|~[01])*)+$"
+                      "pattern": "^(\\/(?!__proto__(\\/|$))([^~/]|~[01])*)+$"
                     },
                     "value": {
                       "$ref": "#/$defs/__schema0"
@@ -221,7 +221,7 @@
                     "path": {
                       "type": "string",
                       "maxLength": 1024,
-                      "pattern": "^(\\/([^~/]|~[01])*)+$"
+                      "pattern": "^(\\/(?!__proto__(\\/|$))([^~/]|~[01])*)+$"
                     },
                     "value": {
                       "$ref": "#/$defs/__schema0"
@@ -249,7 +249,7 @@
                     "path": {
                       "type": "string",
                       "maxLength": 1024,
-                      "pattern": "^(\\/([^~/]|~[01])*)+$"
+                      "pattern": "^(\\/(?!__proto__(\\/|$))([^~/]|~[01])*)+$"
                     },
                     "was": {
                       "type": "string",

@@ -21,7 +21,8 @@ never into this repository or a public issue. This repository holds the format a
 
 ## The file
 
-One JSON object, at most 4 MiB.
+One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key or op path segment anywhere
+(JavaScript readers would take it for an object's prototype).
 
 | Key | Required | Value |
 | --- | --- | --- |
@@ -51,7 +52,7 @@ Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f
 | `id` | yes | unique in the patch (`name-length`), so a review can accept or refuse it by id |
 | `entry` | yes | the entry it covers (see Entries) |
 | `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
-| `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry); only when the seed loads |
+| `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry, so only for `add` and `block`); only when the seed loads |
 | `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
 | `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
 | `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
@@ -113,7 +114,7 @@ against another version of the entry is refused instead of applied blind. `add` 
 array: replace the array whole instead. Values are at most 256 KiB as JSON.
 
 No two changes in a patch edit the same place: no op path of one change is the same as, or lies inside, an op path of
-another.
+another. Appends to one array (`-`) are each a new place, so two changes may both append to it.
 
 ## Evidence
 

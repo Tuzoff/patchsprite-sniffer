@@ -97,6 +97,13 @@ test("one change per entry and per place in the map", () => {
   const param1: Change = { id: "p1", entry: "param/amp/1", action: "repair", source: "wire", ops: [{ op: "replace", path: "/parameters/groups/amp/params/gain/kind", value: "slider", was: fingerprint("knob") }], evidence: [capture] };
   const param2: Change = { ...param1, id: "p2", entry: "param/amp/7", ops: [{ op: "replace", path: "/parameters/groups/amp/params/gain", value: {}, was: fingerprint({}) }] };
   assert.ok(messages(withChanges(param1, param2)).some((m) => /overlaps an edit of changes\[0\]/.test(m)));
+  // appends to one array each go to a new place, but not alongside an edit of the array itself
+  const setting = (id: string, op: NonNullable<Change["ops"]>[number]): Change => ({ id, entry: `setting/${id}`, action: "add", source: "wire", ops: [op], evidence: [capture] });
+  const append = (id: string) => setting(id, { op: "add", path: "/settings/items/-", value: { id } });
+  assert.deepEqual(messages(withChanges(append("a"), append("b"))), []);
+  const whole = setting("c", { op: "add", path: "/settings/items", value: [] });
+  assert.ok(messages(withChanges(append("a"), whole)).some((m) => /overlaps an edit of changes\[0\]/.test(m)));
+  assert.ok(messages(withChanges(whole, append("a"))).some((m) => /overlaps an edit of changes\[0\]/.test(m)));
 });
 
 test("a change claims no more trust than its evidence shows", () => {
@@ -132,8 +139,18 @@ test("the schema refuses what a patch may not hold", () => {
   assert.ok(refused((x) => (x.changes[2].ops[0].was = undefined)), "a replace says what it replaces");
   assert.ok(refused((x) => (x.changes[2].ops[0].path = "/")), "never the whole map");
   assert.ok(refused((x) => (x.changes = [])));
+  assert.ok(refused((x) => (x.changes[1].entryFp = null)), "a confirm is about an entry the base map has");
+  assert.ok(refused((x) => (x.changes[4].ops[0].path = "/messages/setTempo/__proto__")), "a path never reaches a prototype");
+  assert.ok(refused((x) => (x.changes[4].ops[0].path = "/messages/__proto__/x")));
   assert.ok(!parseSeedPatch(" ".repeat(MAX_PATCH_BYTES + 1)).ok);
   assert.throws(() => parseSeedPatch("{"), SyntaxError);
+  // a value parsing would hide in a prototype, and nesting too deep for the recursive checks, are issues, not throws
+  const text = fixture("acme-fx-1.patch.json");
+  const tempoValue = '"value": {\n      "cmd": "40"';
+  assert.ok(text.includes(tempoValue));
+  assert.match(JSON.stringify(parseSeedPatch(text.replace(tempoValue, '"value": {"__proto__": {"allowed": [1]}, "cmd": "40"'))), /no key may be __proto__/);
+  const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
+  assert.match(JSON.stringify(parseSeedPatch(text.replace(tempoValue, `"value": {"deep": ${deep}, "cmd": "40"`))), /nests at most/);
 });
 
 test("applying: stale changes are left out, the rest still land", () => {
