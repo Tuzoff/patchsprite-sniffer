@@ -434,6 +434,13 @@ test("an entry's source comes from the change and its evidence, never from an op
   assert.equal((applySeedPatch(base, sectionThenConfirm).map as typeof base).parameters.groups.amp.params.gain.source.kind, "doc");
   assert.equal((applySeedPatch(base, withChanges(confirmName)).map as typeof base).messages.getName.source.kind, "doc");
   assert.equal(run({ ...confirmName, entry: "getName/amp" }).messages.getName.source.kind, "doc");
+  // a group's blocks are part of each of its parameters' claim: an edit of them gives every parameter the source, and a
+  // confirm of a name that only reaches a parameter through that edit raises nothing
+  const reblock: Change = { id: "a", entry: "parameters", action: "repair", source: "doc", ops: [{ op: "replace", path: "/parameters/groups/amp/blocks", value: ["amp", "drive"], was: fingerprint(["amp"]) }], evidence: [doc] };
+  const viaDrive = { ...confirm("param/drive/1", "read-back", probeOk), id: "b" };
+  assert.deepEqual(messages(against(base, reblock, viaDrive)), []);
+  const reblocked = run(reblock, viaDrive).parameters.groups.amp.params;
+  assert.deepEqual([reblocked.gain.source.kind, reblocked.level.source.kind], ["doc", "doc"]);
 });
 
 test("every top-level key is an entry: known sections, a draft's own sections, measured values", () => {

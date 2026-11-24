@@ -238,11 +238,13 @@ value's own `source` is not an entry's and may be written.
   characters.
 - An `add` or `repair` gives its source to every message, parameter or choice its ops landed in or wrote whole, in
   the base or the firmware delta it edited, whatever entry the change names: a section or measured edit that changes
-  a parameter changes the claim that parameter's source backs. It replaces the old source, which backed the claim as
-  it was, even with a weaker one.
+  a parameter changes the claim that parameter's source backs, and so does an edit of a group's own keys (its
+  `blocks`, say) for every parameter in the group. It replaces the old source, which backed the claim as it was, even
+  with a weaker one.
 - A `confirm` only raises its entry's source, in the ranking above, never lowers it, in the unit's firmware delta when
   the delta has the entry, else in the base. It raises only what its evidence saw: not on a rebased map, not after an
-  earlier change in the patch edited the entry, and not from one block's or one mode's view of a message
+  earlier change in the patch edited the entry, not on an item its entry reaches only because of an earlier change
+  (a group's new `blocks`), and not from one block's or one mode's view of a message
   (`<message>/<block>`, `<message>@<mode>`). The entry's bytes and fingerprint don't change, since the map leaves
   `source` out of the fingerprint, so a raise needs no review.
 

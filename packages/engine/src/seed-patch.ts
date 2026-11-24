@@ -973,6 +973,9 @@ function sourceHomesOf(doc: Json, segs: readonly string[]): string[][] {
   return fws.flatMap((fw) => {
     const prefix = fw === undefined ? [] : ["firmwares", fw];
     const own = fw === undefined ? segs : segs.slice(2);
+    // a group's own keys (its blocks, say) are part of every one of its parameters' claim
+    if (own.length >= 4 && own[0] === "parameters" && own[1] === "groups" && own[3] !== "params")
+      return homesUnder(doc, [...prefix, ...own.slice(0, 3)], ["params", "*"]);
     return SOURCE_HOMES.flatMap((home) => {
       const n = Math.min(own.length, home.length);
       if (!home.slice(0, n).every((x, i) => x === "*" || x === own[i])) return [];
@@ -1007,11 +1010,14 @@ function giveEditSource(doc: Json, p: SeedPatch, c: Change, landed: readonly str
  * entry (not one block's or one mode's view of a message). It lands in the unit's firmware delta when the delta has the
  * entry, else in the base.
  */
-function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: string[][]): void {
+function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: string[][], standIns: ReadonlySet<string>): void {
   const e = parseEntry(c.entry);
   if (c.source === undefined || !e || (e.kind === "message" && (e.block !== undefined || e.mode !== undefined))) return;
+  // the entry as the evidence saw it: an earlier change may have made the name reach another item (a group's blocks)
+  const seen = new Set(entryPaths(input, c.entry, p.unit.firmware, standIns).map((h) => h.join(SEP)));
   // only paths that are a home themselves; a section's path holds homes but is none
   const homes = paths.filter((h) => {
+    if (!seen.has(h.join(SEP))) return false;
     const own = h[0] === "firmwares" ? h.slice(2) : h;
     return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
   });
@@ -1061,7 +1067,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
-      if (c.action === "confirm" && !rebased) raiseSource(doc, map as Json, p, c, before);
+      if (c.action === "confirm" && !rebased) raiseSource(doc, map as Json, p, c, before, standIns);
       return { change: c.id, status: "marked" };
     }
     // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
