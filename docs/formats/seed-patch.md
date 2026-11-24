@@ -27,7 +27,7 @@ One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key
 | Key | Required | Value |
 | --- | --- | --- |
 | `format` | yes | `"patchsprite-seed-patch"` |
-| `version` | yes | `1` |
+| `version` | yes | `1`; once the format is public, any rename or removal of a key (such as `sources` to `files`) needs version `2` |
 | `map` | yes | the seed it changes, `<make>/<device>` as the map folder names it (`acme/fx-1`) |
 | `base.file` | yes | fingerprint of the seed file's JSON as written (see Fingerprints), so a draft that doesn't load yet still has one |
 | `base.mapVersion` | no | the map's `mapVersion` as the app's map checks compute it, when the seed loads |
@@ -242,7 +242,8 @@ value's own `source` is not an entry's and may be written.
   `blocks`, say) for every parameter in the group. It replaces the old source, which backed the claim as it was, even
   with a weaker one.
 - A `confirm` only raises its entry's source, in the ranking above, never lowers it, in the unit's firmware delta when
-  the delta has the entry, else in the base. It raises only what its evidence saw: not on a rebased map, not after an
+  the delta has the entry, else in the base, where its `ref` ends with the firmware it was seen on (`, on 1.20`),
+  since a base entry serves every firmware without its own delta. It raises only what its evidence saw: not on a rebased map, not after an
   earlier change in the patch edited the entry, not on an item its entry reaches only because of an earlier change
   (a group's new `blocks`), and not from one block's or one mode's view of a message
   (`<message>/<block>`, `<message>@<mode>`). The entry's bytes and fingerprint don't change, since the map leaves

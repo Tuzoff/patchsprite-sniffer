@@ -1024,11 +1024,13 @@ function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: str
   const delta = homes.filter((h) => h[0] === "firmwares");
   const ref = sourceRef(p, c);
   const claim = (v: Json | undefined) => (isObject(v) ? fingerprint({ ...v, source: undefined }) : undefined);
+  // a base entry serves every firmware without its own delta: say which one the evidence was seen on
+  const baseRef = `${ref ?? c.source}, on ${p.unit.firmware}`.slice(0, 512);
   for (const h of delta.length ? delta : homes) {
     const entry = at(doc, h);
     if (!isObject(entry) || claim(entry) !== claim(at(input, h))) continue;
     const had = isObject(entry.source) && typeof entry.source.kind === "string" ? SOURCE_RANK.indexOf(entry.source.kind) : -1;
-    if (SOURCE_RANK.indexOf(c.source) > had) entry.source = withSource(c.source, ref);
+    if (SOURCE_RANK.indexOf(c.source) > had) entry.source = withSource(c.source, delta.length ? ref : baseRef);
   }
 }
 
