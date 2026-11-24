@@ -1010,7 +1010,11 @@ function giveEditSource(doc: Json, p: SeedPatch, c: Change, landed: readonly str
 function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: string[][]): void {
   const e = parseEntry(c.entry);
   if (c.source === undefined || !e || (e.kind === "message" && (e.block !== undefined || e.mode !== undefined))) return;
-  const homes = paths.filter((h) => sourceHomesOf(doc, h).some((x) => x.join(SEP) === h.join(SEP)));
+  // only paths that are a home themselves; a section's path holds homes but is none
+  const homes = paths.filter((h) => {
+    const own = h[0] === "firmwares" ? h.slice(2) : h;
+    return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
+  });
   const delta = homes.filter((h) => h[0] === "firmwares");
   const ref = sourceRef(p, c);
   const claim = (v: Json | undefined) => (isObject(v) ? fingerprint({ ...v, source: undefined }) : undefined);

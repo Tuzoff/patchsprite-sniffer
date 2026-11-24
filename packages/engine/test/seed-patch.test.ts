@@ -428,6 +428,10 @@ test("an entry's source comes from the change and its evidence, never from an op
   // not from one block's or one mode's view of a message
   const confirmName = confirm("getName", "read-back", probeOk);
   assert.equal(run(baseEdit, confirmName).messages.getName.source.kind, "doc");
+  // the same through a patch that checks: a section edit inside the parameter, then a confirm of the parameter
+  const sectionThenConfirm = against(base, section, { ...confirm("param/amp/1", "read-back", probeOk), id: "k-gain" });
+  assert.deepEqual(messages(sectionThenConfirm), []);
+  assert.equal((applySeedPatch(base, sectionThenConfirm).map as typeof base).parameters.groups.amp.params.gain.source.kind, "doc");
   assert.equal((applySeedPatch(base, withChanges(confirmName)).map as typeof base).messages.getName.source.kind, "doc");
   assert.equal(run({ ...confirmName, entry: "getName/amp" }).messages.getName.source.kind, "doc");
 });
