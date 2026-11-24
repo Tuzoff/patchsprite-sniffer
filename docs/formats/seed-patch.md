@@ -230,16 +230,21 @@ firmware delta), `provenance` (anywhere, in a path or a value), or a draft's top
 `checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. A measured
 value's own `source` is not an entry's and may be written.
 
-`applySeedPatch` gives the entry its source itself, on a message, a parameter or a choice (the entries the map keeps
-one on), in the unit's firmware delta when the delta has the entry, else in the base:
+`applySeedPatch` gives sources itself, on messages, parameters and choices (the entries the map keeps one on):
 
 - `kind` is the change's `source`, and `ref` says what the first piece of evidence that backs it was read from: a
   document's citation, the probe's request and time, the file's id in `files` with the first 16 digits of its hash
   (a capture, or a replay or device list that names a file), else the evidence's kind and time; at most 512
   characters.
-- An `add` or `repair` replaces the old source, which backed the claim as it was, even with a weaker one. A `confirm`
-  only raises it, in the ranking above, never lowers it; the entry's bytes and fingerprint don't change, since the map
-  leaves `source` out of the fingerprint.
+- An `add` or `repair` gives its source to every message, parameter or choice its ops landed in or wrote whole, in
+  the base or the firmware delta it edited, whatever entry the change names: a section or measured edit that changes
+  a parameter changes the claim that parameter's source backs. It replaces the old source, which backed the claim as
+  it was, even with a weaker one.
+- A `confirm` only raises its entry's source, in the ranking above, never lowers it, in the unit's firmware delta when
+  the delta has the entry, else in the base. It raises only what its evidence saw: not on a rebased map, not after an
+  earlier change in the patch edited the entry, and not from one block's or one mode's view of a message
+  (`<message>/<block>`, `<message>@<mode>`). The entry's bytes and fingerprint don't change, since the map leaves
+  `source` out of the fingerprint, so a raise needs no review.
 
 A draft's top-level `provenance` stays its own bookkeeping; folding it into per-entry sources is the map's move, not a
 patch's.

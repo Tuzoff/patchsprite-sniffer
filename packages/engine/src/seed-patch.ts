@@ -956,25 +956,69 @@ function sourceRef(p: SeedPatch, c: Change): string | undefined {
   return ref?.slice(0, 512);
 }
 
-/**
- * Give the entry the change's source, as the map keeps it: `{kind, ref}` on a message, a parameter or a choice, in the
- * unit's firmware delta when it has the entry there (the evidence is about what that firmware reads), else in the base.
- * An edit's source replaces the old one, which backed the claim as it was; a confirm only raises it.
- */
-function giveSource(doc: Json, p: SeedPatch, c: Change, paths: string[][]): void {
-  const kind = c.source;
-  if (kind === undefined) return;
-  const homes = paths.filter((h) => {
-    const own = h[0] === "firmwares" ? h.slice(2) : h;
-    return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
+const withSource = (kind: Source, ref: string | undefined): Json => (ref ? { kind, ref } : { kind });
+
+/** The objects that keep a source (a message, a parameter, a choice) at `pat` under `path`, as concrete paths. */
+function homesUnder(doc: Json, path: string[], pat: readonly string[]): string[][] {
+  if (!pat.length) return isObject(at(doc, path)) ? [path] : [];
+  const [k, ...rest] = pat;
+  const v = at(doc, path);
+  if (!isObject(v)) return [];
+  return (k === "*" ? Object.keys(v) : Object.hasOwn(v, k) ? [k] : []).flatMap((x) => homesUnder(doc, [...path, x], rest));
+}
+
+/** Where a path is in a source home: the home it is in, or the homes it holds, in the base or a firmware delta. */
+function sourceHomesOf(doc: Json, segs: readonly string[]): string[][] {
+  const fws = segs[0] === "firmwares" ? (segs.length >= 2 ? [segs[1]] : Object.keys((at(doc, ["firmwares"]) as Record<string, Json>) ?? {})) : [undefined];
+  return fws.flatMap((fw) => {
+    const prefix = fw === undefined ? [] : ["firmwares", fw];
+    const own = fw === undefined ? segs : segs.slice(2);
+    return SOURCE_HOMES.flatMap((home) => {
+      const n = Math.min(own.length, home.length);
+      if (!home.slice(0, n).every((x, i) => x === "*" || x === own[i])) return [];
+      // in a home: that one; above homes: every one it holds
+      return own.length >= home.length ? [[...prefix, ...own.slice(0, home.length)]] : homesUnder(doc, [...prefix, ...own], home.slice(own.length));
+    });
   });
+}
+
+/**
+ * An edit gives its source to every message, parameter or choice its ops landed in or wrote whole, whatever entry
+ * the change names (a section or measured edit that changes a parameter changes the claim the parameter's source
+ * backs). It replaces the old source, which backed the claim as it was.
+ */
+function giveEditSource(doc: Json, p: SeedPatch, c: Change, landed: readonly string[][]): void {
+  if (c.source === undefined) return;
+  const ref = sourceRef(p, c);
+  const done = new Set<string>();
+  for (const l of landed)
+    for (const h of sourceHomesOf(doc, l)) {
+      const key = h.join(SEP);
+      const entry = at(doc, h);
+      if (done.has(key) || !isObject(entry)) continue;
+      done.add(key);
+      entry.source = withSource(c.source, ref);
+    }
+}
+
+/**
+ * A confirm raises its entry's source, never lowers it, and only when the evidence is about the entry as it now is:
+ * on the map the patch was made against, with no earlier change in the patch having edited it, and for the whole
+ * entry (not one block's or one mode's view of a message). It lands in the unit's firmware delta when the delta has the
+ * entry, else in the base.
+ */
+function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: string[][]): void {
+  const e = parseEntry(c.entry);
+  if (c.source === undefined || !e || (e.kind === "message" && (e.block !== undefined || e.mode !== undefined))) return;
+  const homes = paths.filter((h) => sourceHomesOf(doc, h).some((x) => x.join(SEP) === h.join(SEP)));
   const delta = homes.filter((h) => h[0] === "firmwares");
   const ref = sourceRef(p, c);
+  const claim = (v: Json | undefined) => (isObject(v) ? fingerprint({ ...v, source: undefined }) : undefined);
   for (const h of delta.length ? delta : homes) {
     const entry = at(doc, h);
-    if (!isObject(entry)) continue;
+    if (!isObject(entry) || claim(entry) !== claim(at(input, h))) continue;
     const had = isObject(entry.source) && typeof entry.source.kind === "string" ? SOURCE_RANK.indexOf(entry.source.kind) : -1;
-    if (c.action !== "confirm" || SOURCE_RANK.indexOf(kind) > had) entry.source = ref ? { kind, ref } : { kind };
+    if (SOURCE_RANK.indexOf(c.source) > had) entry.source = withSource(c.source, ref);
   }
 }
 
@@ -1013,7 +1057,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
-      if (c.action === "confirm") giveSource(doc, p, c, before);
+      if (c.action === "confirm" && !rebased) raiseSource(doc, map as Json, p, c, before);
       return { change: c.id, status: "marked" };
     }
     // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
@@ -1037,7 +1081,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
       rollBack(undo);
       return refused(c, why ?? `${c.ops[stray].path} is not where ${c.entry} is`);
     }
-    giveSource(doc, p, c, after);
+    giveEditSource(doc, p, c, landed);
     return { change: c.id, status: "applied" };
   });
   return { map: doc, rebased, results };
