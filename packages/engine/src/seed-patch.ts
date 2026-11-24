@@ -557,7 +557,8 @@ const SEP = "\u0000";
 function blockPins(maps: readonly Json[]): Set<string> {
   const seen = new Map<string, Record<string, Json>[]>();
   const blocked = new Set<string>();
-  const modes: Record<string, Json>[] = [];
+  // what stands in for a message or layout in some mode; one mapped to itself doesn't
+  const stand = { messages: new Map<string, Set<string>>(), layouts: new Map<string, Set<string>>() };
   for (const map of maps) {
     const firmwares = at(map, ["firmwares"]);
     const deltas = isObject(firmwares) ? Object.values(firmwares) : [];
@@ -572,15 +573,20 @@ function blockPins(maps: readonly Json[]): Set<string> {
     for (const list of [at(map, ["blocked"]), ...deltas.map((d) => at(d, ["blocked"]))])
       if (Array.isArray(list)) for (const b of list) if (typeof b === "string") blocked.add(b);
     const use = at(map, ["modes", "use"]);
-    if (isObject(use)) for (const u of Object.values(use)) if (isObject(u)) modes.push(u);
+    if (isObject(use))
+      for (const u of Object.values(use))
+        for (const kind of ["messages", "layouts"] as const) {
+          const t = isObject(u) ? u[kind] : undefined;
+          if (isObject(t))
+            for (const [name, v] of Object.entries(t))
+              if (typeof v === "string" && v !== name) {
+                const set = stand[kind].get(name);
+                if (set) set.add(v);
+                else stand[kind].set(name, new Set([v]));
+              }
+        }
   }
-  // what stands in for `name` in some mode; one mapped to itself doesn't
-  const standIns = (kind: "messages" | "layouts", name: string) =>
-    modes.flatMap((u) => {
-      const t = u[kind];
-      const v = isObject(t) && Object.hasOwn(t, name) ? t[name] : undefined;
-      return typeof v === "string" && v !== name ? [v] : [];
-    });
+  const standIns = (kind: "messages" | "layouts", name: string): Iterable<string> => stand[kind].get(name) ?? [];
   for (const b of [...blocked]) for (const s of standIns("messages", b)) blocked.add(s);
   const cmds = new BlockedCmds();
   for (const b of blocked) for (const m of seen.get(b) ?? []) if (typeof m.cmd === "string") cmds.add(m.cmd);
