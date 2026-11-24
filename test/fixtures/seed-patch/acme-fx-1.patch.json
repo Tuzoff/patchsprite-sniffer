@@ -1,0 +1,230 @@
+{
+ "format": "patchsprite-seed-patch",
+ "version": 1,
+ "map": "acme/fx-1",
+ "base": {
+  "file": "3cdebe7880b5fe69"
+ },
+ "unit": {
+  "firmware": "1.20",
+  "identity": "f0 7e 00 06 02 7d 01 00 02 00 01 14 00 00 f7",
+  "usb": {
+   "vid": 4660,
+   "pid": 22136
+  }
+ },
+ "producer": {
+  "tool": "app",
+  "version": "0.1.0"
+ },
+ "createdAt": "2026-11-24T18:02:11Z",
+ "sources": {
+  "probe-1": {
+   "kind": "probe-log",
+   "note": "first-contact probe, 9 requests"
+  },
+  "walk-1": {
+   "kind": "capture",
+   "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+   "note": "targeted re-walk of the name and tempo controls"
+  }
+ },
+ "changes": [
+  {
+   "id": "get-preset",
+   "entry": "getPreset",
+   "action": "confirm",
+   "source": "read-back",
+   "evidence": [
+    {
+     "kind": "probe",
+     "at": "2026-11-24T18:00:01Z",
+     "request": "getPreset",
+     "sent": "f0 7d 01 10 f7",
+     "replies": [
+      "f0 7d 01 11 05 f7"
+     ],
+     "result": "shape-ok"
+    }
+   ]
+  },
+  {
+   "id": "set-preset",
+   "entry": "setPreset",
+   "action": "confirm",
+   "source": "read-back",
+   "evidence": [
+    {
+     "kind": "read-back",
+     "at": "2026-11-24T18:00:09Z",
+     "sent": "f0 7d 01 12 05 f7",
+     "readBack": "f0 7d 01 11 05 f7",
+     "result": "match",
+     "echo": true
+    }
+   ]
+  },
+  {
+   "id": "name-length",
+   "entry": "nameReply",
+   "action": "repair",
+   "source": "wire",
+   "ops": [
+    {
+     "op": "replace",
+     "path": "/messages/nameReply/payload/fields/0/length",
+     "value": 16,
+     "was": "6b51d431df5d7f14"
+    }
+   ],
+   "evidence": [
+    {
+     "kind": "probe",
+     "at": "2026-11-24T18:00:04Z",
+     "request": "getName",
+     "sent": "f0 7d 01 30 f7",
+     "replies": [
+      "f0 7d 01 31 43 6c 65 61 6e 20 32 00 00 00 00 00 00 00 00 00 f7"
+     ],
+     "result": "mismatch",
+     "detail": "cmd 31 has 16 name bytes; the seed says 12"
+    },
+    {
+     "kind": "capture",
+     "source": "walk-1",
+     "action": "00007",
+     "label": "preset name: Clean 1 → Clean 2",
+     "records": [
+      412,
+      413
+     ],
+     "frames": [
+      {
+       "dir": "in",
+       "bytes": "f0 7d 01 31 43 6c 65 61 6e 20 32 00 00 00 00 00 00 00 00 00 f7"
+      }
+     ]
+    }
+   ],
+   "note": "every name reply in the walk carries 16 bytes"
+  },
+  {
+   "id": "amp-bypass",
+   "entry": "setBypass/amp",
+   "action": "suspect",
+   "evidence": [
+    {
+     "kind": "read-back",
+     "at": "2026-11-24T18:00:15Z",
+     "sent": "f0 7d 01 22 01 01 f7",
+     "readBack": "f0 7d 01 21 01 00 f7",
+     "result": "differs",
+     "echo": true,
+     "detail": "echo write of on=1 read back as 0"
+    }
+   ]
+  },
+  {
+   "id": "tempo",
+   "entry": "setTempo",
+   "action": "add",
+   "source": "wire",
+   "ops": [
+    {
+     "op": "add",
+     "path": "/messages/setTempo",
+     "value": {
+      "cmd": "40",
+      "dir": "send",
+      "payload": {
+       "fields": [
+        {
+         "name": "bpm",
+         "type": "u16",
+         "min": 40,
+         "max": 250
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "evidence": [
+    {
+     "kind": "capture",
+     "source": "walk-1",
+     "action": "00011",
+     "label": "tempo: 120 → 121",
+     "records": [
+      530
+     ],
+     "frames": [
+      {
+       "dir": "out",
+       "bytes": "f0 7d 01 40 79 00 f7"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "preset-count",
+   "entry": "constant/presetCount",
+   "action": "add",
+   "source": "device-reported",
+   "ops": [
+    {
+     "op": "add",
+     "path": "/firmwares/1.20/constants/presetCount",
+     "value": 100
+    }
+   ],
+   "evidence": [
+    {
+     "kind": "device-list",
+     "at": "2026-11-24T18:00:20Z",
+     "request": "getPreset",
+     "replies": [
+      "f0 7d 01 11 63 f7"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "amp-level",
+   "entry": "param/amp/2",
+   "action": "remove",
+   "ops": [
+    {
+     "op": "remove",
+     "path": "/parameters/groups/amp/params/level",
+     "was": "4d8fd33d55dab4fd"
+    }
+   ],
+   "evidence": [
+    {
+     "kind": "device-list",
+     "at": "2026-11-24T18:00:06Z",
+     "request": "listParams",
+     "replies": [
+      "f0 7d 01 51 01 01 f7",
+      "f0 7d 01 52 f7"
+     ]
+    }
+   ],
+   "note": "the unit lists one amp parameter, id 1"
+  },
+  {
+   "id": "factory-reset",
+   "entry": "factoryReset",
+   "action": "block",
+   "evidence": [
+    {
+     "kind": "doc",
+     "citation": "Acme FX-1 owner's manual, p. 41",
+     "quote": "factory reset erases every user preset"
+    }
+   ]
+  }
+ ]
+}

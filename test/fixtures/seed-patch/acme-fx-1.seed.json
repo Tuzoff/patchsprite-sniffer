@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "status": "draft",
+  "driver": "param-change",
+  "transport": {
+    "framing": "sysex-plain",
+    "frame": { "header": "f0 7d 01", "terminator": "f7" },
+    "inner": { "cmdLength": 1 },
+    "endian": "le",
+    "timing": { "frameGapMs": 0, "replyTimeoutMs": 300, "ackTimeoutMs": 300 }
+  },
+  "messages": {
+    "getPreset": { "cmd": "10", "dir": "request", "reply": { "message": "presetReply" } },
+    "presetReply": { "cmd": "11", "dir": "reply", "payload": { "fields": [{ "name": "preset", "type": "u8" }] } },
+    "setPreset": { "cmd": "12", "dir": "send", "payload": { "fields": [{ "name": "preset", "type": "u8", "max": 99 }] } },
+    "getBypass": {
+      "cmd": "20",
+      "dir": "request",
+      "payload": { "fields": [{ "name": "block", "type": "u8", "enum": "block" }] },
+      "reply": { "message": "bypassReply" }
+    },
+    "bypassReply": {
+      "cmd": "21",
+      "dir": "reply",
+      "payload": { "fields": [{ "name": "block", "type": "u8", "enum": "block" }, { "name": "on", "type": "u8" }] }
+    },
+    "setBypass": {
+      "cmd": "22",
+      "dir": "send",
+      "payload": { "fields": [{ "name": "block", "type": "u8", "enum": "block" }, { "name": "on", "type": "u8", "allowed": [0, 1] }] }
+    },
+    "getName": { "cmd": "30", "dir": "request", "reply": { "message": "nameReply" } },
+    "nameReply": { "cmd": "31", "dir": "reply", "payload": { "fields": [{ "name": "name", "type": "string", "length": 12 }] } },
+    "factoryReset": { "cmd": "7f", "dir": "send" }
+  },
+  "layouts": {},
+  "enums": { "block": { "amp": 1, "drive": 2, "delay": 3 } },
+  "parameters": {
+    "knobMax": 100,
+    "groups": {
+      "amp": { "blocks": ["amp"], "params": { "gain": { "id": 1, "kind": "knob" }, "level": { "id": 2, "kind": "knob" } } }
+    }
+  }
+}
