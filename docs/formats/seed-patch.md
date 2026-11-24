@@ -1,0 +1,187 @@
+# Seed patch format
+
+**Status: proposal.** Nothing reads or writes seed patches yet. The format, its JSON Schema and its checks are here so
+the sniffer, the Patchsprite app and the cloud map builder agree on one shape before any of them builds it. Field names
+may still change until the first-contact work is built.
+
+A seed map is a device map made from public sources before anyone has tried it on a real unit. When a unit meets it
+for the first time, the app's probe, the player and (when needed) a sniffer walk all produce evidence about the seed.
+A **seed patch** is that evidence written as changes to the seed: one change per map entry, each carrying its own
+evidence. Each change is reviewed, accepted or refused on its own, so the entries that passed keep their trust while
+the ones that failed are fixed.
+
+- Schema: [`schemas/seed-patch.v1.schema.json`](../../schemas/seed-patch.v1.schema.json), generated from the zod
+  schema in [`packages/engine/src/seed-patch.ts`](../../packages/engine/src/seed-patch.ts).
+- Checks the JSON Schema can't state, applying a patch and working out what needs review: `checkSeedPatch`,
+  `applySeedPatch` and `reviewReasons` in the same file.
+- Example on a made-up device: [`test/fixtures/seed-patch/`](../../test/fixtures/seed-patch/).
+
+A patch file is data about one device, as private as the capture it came from. It goes to the Patchsprite cloud only,
+never into this repository or a public issue. This repository holds the format and made-up examples only.
+
+## The file
+
+One JSON object, at most 4 MiB.
+
+| Key | Required | Value |
+| --- | --- | --- |
+| `format` | yes | `"patchsprite-seed-patch"` |
+| `version` | yes | `1` |
+| `map` | yes | the seed it changes, `<make>/<device>` as the map folder names it (`acme/fx-1`) |
+| `base.file` | yes | fingerprint of the seed file's JSON as written (see Fingerprints), so a draft that doesn't load yet still has one |
+| `base.mapVersion` | no | the map's `mapVersion` as the app's map checks compute it, when the seed loads |
+| `unit.firmware` | yes | the firmware the unit reports, as the map spells it |
+| `unit.identity` | no | the MIDI universal identity reply, as received bytes |
+| `unit.usb` | no | `{vid, pid}` |
+| `producer` | yes | `{tool, version}`, where `tool` is `sniffer`, `app`, `cloud` or `manual` |
+| `createdAt` | yes | ISO 8601 time with offset |
+| `sources` | no | files the evidence points into, by id: `{kind, sha256?, note?}`, `kind` one of `capture`, `probe-log`, `map-checks`, `doc` |
+| `changes` | yes | 1 to 4,096 changes |
+
+A patch names a unit by model and firmware only. It holds no person, machine, file path, MIDI port name or serial
+number, like the app's map-check records. One patch covers one unit and one firmware; the cloud counts units by
+combining patches.
+
+Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f0 7d 01 10 f7`).
+
+## Changes
+
+| Key | Required | Value |
+| --- | --- | --- |
+| `id` | yes | unique in the patch (`name-length`), so a review can accept or refuse it by id |
+| `entry` | yes | the entry it covers (see Entries) |
+| `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
+| `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry); only when the seed loads |
+| `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
+| `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
+| `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
+| `note` | no | for the reviewer; never shown to the chat model |
+
+The six actions:
+
+| Action | Ops | Means |
+| --- | --- | --- |
+| `add` | `add` only | the seed lacks the entry and the unit has it |
+| `repair` | any | the entry is wrong and the ops fix it |
+| `remove` | `remove` only | the unit has no such thing (the editor never offers it, the unit's own list lacks it) |
+| `confirm` | none | the entry is right as seeded |
+| `suspect` | none | the unit contradicts the entry and there is no fix yet; the list of suspects is the plan for a targeted re-walk |
+| `block` | none | never send it on this firmware (a freeze, or a hazard a document names) |
+
+`confirm`, `suspect` and `block` are marks for the unit's firmware: they leave the map as it is, and whoever reads the
+patch keeps them in its own store (the app's map-checks store, the cloud's per-firmware entry states).
+
+## Entries
+
+Entry names extend the ones the app's map checks already use (`docs/design/map-checks.md` in the app), so a patch and a
+map-check record about the same entry use the same name.
+
+| Entry | Covers | Its home in the map |
+| --- | --- | --- |
+| `<message>` | a message | `/messages/<message>`, `/firmwares/<fw>/messages/<message>` |
+| `<message>/<block>` | a message on one block; marks only | (none: edits go to the message) |
+| `param/<block>/<id>` | a block parameter by id | `/parameters/groups/*/params/*` |
+| `choice/<name>` | a choice | `/choices/<name>` |
+| `layout/<name>` | a shared layout | `/layouts/<name>`, `/firmwares/<fw>/layouts/<name>` |
+| `enum/<name>` | an enum | `/enums/<name>` |
+| `constant/<name>` | a named constant | `/constants/<name>`, `/firmwares/<fw>/constants/<name>` |
+| `control/<name>` | a MIDI channel control | `/controls/items/<name>` |
+| `setting/<id>` | a global setting | `/settings/items/*` |
+| `transport`, `host`, `identity`, `driver`, `scratch`, `audio`, `display` | that whole section | `/<section>` |
+| `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
+
+The first four kinds are the app's; the rest are new here. `identity` is the proposed key for the unit's identity
+reply. The words that start a kind (`param`, `setting`, `choice`, `layout`, `enum`, `constant`, `control` and the
+section names) are never message names.
+
+A change's ops stay inside its entry's homes. `<fw>` is the unit's own firmware: evidence from one firmware changes
+the base map or that firmware's delta, never another firmware's. A parameter or setting is found by its id, so after
+the ops run the applier checks that the entry is there (`add`, `repair`) or gone (`remove`).
+
+## Ops
+
+An op is a JSON Patch (RFC 6902) operation with a guard:
+
+| Op | Keys | Applies when |
+| --- | --- | --- |
+| `add` | `path`, `value` | nothing is at `path` (objects on the way that are missing are created, such as a new firmware's delta), or `path` ends in `-` to append to an array |
+| `replace` | `path`, `value`, `was` | the value at `path` has fingerprint `was` |
+| `remove` | `path`, `was` | the value at `path` has fingerprint `was` |
+
+`path` is a JSON Pointer (RFC 6901) below the map's root. `was` makes each edit say what it replaces, so an edit made
+against another version of the entry is refused instead of applied blind. `add` never inserts into the middle of an
+array: replace the array whole instead. Values are at most 256 KiB as JSON.
+
+No two changes in a patch edit the same place: no op path of one change is the same as, or lies inside, an op path of
+another.
+
+## Evidence
+
+| Kind | Keys | Is |
+| --- | --- | --- |
+| `capture` | `source`, `action?`, `label?`, `records?`, `frames?` | traffic the sniffer recorded between the vendor editor and the unit: the labelled step, record numbers in the capture file (from 0), and the frames copied (`{dir, bytes}`, `dir` `out` to the device, `in` from it) so the change can be reviewed without the capture |
+| `probe` | `at`, `request`, `sent`, `replies`, `result`, `detail?` | a read-only request sent once on first contact; `result` is `shape-ok` (decoded as the seed says), `mismatch` (answered, but not as the seed says) or `silent` (no answer in time); `detail` is the decoder's difference ("cmd 31 has 16 name bytes; the seed says 12") |
+| `read-back` | `at`, `sent`, `readBack`, `result`, `echo`, `detail?` | a write, then a read of the same value; `result` `match` or `differs`; `echo` when the write sent back the value its paired read had just returned, so the sound didn't change |
+| `replay` | `at`, `result`, `source?`, `detail?` | the rebuilt entry replayed on the unit (sniffer spec S18, verify before it goes live) |
+| `device-list` | `at`, `request`, `replies`, `source?` | a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) |
+| `player` | `at`, `question`, `answer` | the player's answer where nothing can be read back ("Did the unit switch to preset 12?"), `yes`, `no` or `unsure` |
+| `freeze` | `at`, `sent`, `errorText?`, `recovery` | the unit stopped answering after a send; `recovery` `power-cycle`, `replug` or `none` |
+| `map-check` | `at`, `fp`, `outcome`, `claimed?`, `observed?`, `why?` | a line of the app's map-check log, less what the patch already says (map, firmware, entry) |
+| `doc` | `citation`, `quote?` | a vendor or third-party document; the weakest evidence |
+
+A `source` names an entry of the patch's `sources`.
+
+Evidence **against** the entry as the seed has it: a probe that is `mismatch` or `silent`, a read-back or replay that
+`differs`, a map check that `contradicts`, `disagrees` or `reopens`, a player's `no`, and any freeze. A `confirm` may
+carry none of it, a `suspect` needs some, and a `block` needs a freeze or a document.
+
+## Sources
+
+The provenance words a change can give its entry, each backed by at least one piece of its evidence. A change claims
+no more trust than its evidence shows.
+
+| `source` | Backed by |
+| --- | --- |
+| `wire` | a `capture` |
+| `device-reported` | a `device-list` |
+| `read-back` | a `probe` that is `shape-ok`, a `read-back` that matches, or a map check that `confirms` or `settles` |
+| `replay-verified` | a `replay` that matches |
+| `player-confirmed` | a player's `yes` |
+| `doc` | a `doc` |
+
+These are the map's provenance words (sniffer spec, Map format) plus `player-confirmed`, which is new here, from the
+first-contact design. The map's `test` provenance is for the app's own test maps and never appears in a patch.
+
+## Applying a patch
+
+1. Check it: the schema, then `checkSeedPatch`. A patch that fails is refused whole.
+2. Work out what needs a person (`reviewReasons`, below) and which changes a review accepted.
+3. Apply the accepted changes in order, each all or nothing, to a copy of the map (`applySeedPatch`). A change whose
+   ops no longer fit (an `add` where something is, a `was` that doesn't match) is left out as `stale`, and the rest
+   still land, so a patch made against an older seed is still useful wherever its entries didn't change. When
+   `base.file` doesn't match the map, the result says `rebased`. A change whose ops ran but don't do what its action
+   says is `refused`.
+4. Keep the marks (`confirm`, `suspect`, `block`) in the reader's own per-firmware store.
+
+The applier gives the entries it changed the change's `source` as their provenance; a patch never edits a draft's own
+bookkeeping (`status`, `gaps`, `provenance`).
+
+## What needs review
+
+Whatever the producer says, the reader works out from the ops which changes a person must review before they reach
+any player other than the unit's owner (live updates design, "Versions, rollback and trust"):
+
+- removing an entry;
+- anything under `safety` or `blocked`, or a value that holds one;
+- what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, anywhere in the path or value;
+- the framing (`/transport`), which every message depends on;
+- `agentNotes`, the only map text the chat model reads as guidance.
+
+## Fingerprints
+
+A fingerprint is the first 16 hex digits of the SHA-256 of a JSON value in RFC 8785 canonical form, the same form as
+the app's map-check fingerprints, checked against the same vectors
+([`test/fixtures/fingerprint/canonical-vectors.json`](../../test/fixtures/fingerprint/canonical-vectors.json)).
+`base.file` and `was` fingerprint JSON as written in the file, so they work on a draft the engine can't load yet.
+`entryFp` and `base.mapVersion` are the app's map-check forms, which read the map through the engine and so exist only
+for a seed that loads; they move into this package with the engine.

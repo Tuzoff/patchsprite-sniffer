@@ -6,6 +6,12 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 - **Sends captures to the Patchsprite cloud** under terms you accept the first time you use it. Observed data (the recorded messages and what they appear to control) is used to add support for your device. You keep a local copy.
 - **TypeScript.** Code is coming soon, together with a shared engine package for reading device map files and decoding device messages.
 
+## Formats
+
+- [Seed patch](docs/formats/seed-patch.md) (proposal): changes a unit's evidence makes to a seed device map, one change per entry, each with its evidence.
+
+Run the tests with `npm ci && npm test` (Node 22.18 or newer).
+
 This repository contains the sniffer and the shared engine package only. It does not contain device mappings, vendor files or vendor software.
 
 ## License

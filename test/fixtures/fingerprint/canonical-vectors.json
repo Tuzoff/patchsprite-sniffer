@@ -1,0 +1,73 @@
+{
+ "about": "Canonical JSON and fingerprint test vectors, shared with the Patchsprite app and cloud: a JSON value, its RFC 8785 form and its fingerprint (first 16 hex digits of the SHA-256 of that form). The skip member is undefined in the test, so it is left out.",
+ "canonical": [
+  {
+   "input": null,
+   "canonical": "null",
+   "fp": "74234e98afe7498f"
+  },
+  {
+   "input": true,
+   "canonical": "true",
+   "fp": "b5bea41b6c623f7c"
+  },
+  {
+   "input": 0,
+   "canonical": "0",
+   "fp": "5feceb66ffc86f38"
+  },
+  {
+   "input": -1.5,
+   "canonical": "-1.5",
+   "fp": "37c2b212b94e5372"
+  },
+  {
+   "input": 1e+21,
+   "canonical": "1e+21",
+   "fp": "241c4643fa70b1dc"
+  },
+  {
+   "input": "a\"b\\c\u0001",
+   "canonical": "\"a\\\"b\\\\c\\u0001\"",
+   "fp": "76f1072baa0d89ae"
+  },
+  {
+   "input": "é🎸",
+   "canonical": "\"é🎸\"",
+   "fp": "83ca86a6d2a84ffd"
+  },
+  {
+   "input": [
+    1,
+    null,
+    "x"
+   ],
+   "canonical": "[1,null,\"x\"]",
+   "fp": "821ba201c1e4a0fe"
+  },
+  {
+   "input": {
+    "b": 2,
+    "a": 1,
+    "c": {
+     "z": [],
+     "y": {}
+    }
+   },
+   "canonical": "{\"a\":1,\"b\":2,\"c\":{\"y\":{},\"z\":[]}}",
+   "fp": "774905abcff8f4ee"
+  },
+  {
+   "input": {
+    "é": 1,
+    "z": 2,
+    "A": 3,
+    "a": 4,
+    "€": 5,
+    "🎸": 6
+   },
+   "canonical": "{\"A\":3,\"a\":4,\"z\":2,\"é\":1,\"€\":5,\"🎸\":6}",
+   "fp": "155ba9b6767dac0e"
+  }
+ ]
+}
