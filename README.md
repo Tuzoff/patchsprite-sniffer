@@ -10,8 +10,8 @@ This repository contains the sniffer and the shared engine package only. It does
 
 ## License
 
-AGPL-3.0. See [LICENSE](LICENSE).
+Copyright © 2026 Leadt Technology Inc. Licensed under AGPL-3.0; see [LICENSE](LICENSE).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). A contributor license agreement (CLA) is required.
+See [CONTRIBUTING.md](CONTRIBUTING.md). A signed [contributor license agreement](CLA.md) is required; CLA Assistant asks you to sign it on your first pull request.
