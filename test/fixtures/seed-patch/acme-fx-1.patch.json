@@ -18,7 +18,7 @@
   "version": "0.1.0"
  },
  "createdAt": "2026-11-24T18:02:11Z",
- "sources": {
+ "files": {
   "probe-1": {
    "kind": "probe-log",
    "note": "first-contact probe, 9 requests"
@@ -91,7 +91,7 @@
     },
     {
      "kind": "capture",
-     "source": "walk-1",
+     "file": "walk-1",
      "action": "00007",
      "label": "preset name: Clean 1 → Clean 2",
      "records": [
@@ -152,7 +152,7 @@
    "evidence": [
     {
      "kind": "capture",
-     "source": "walk-1",
+     "file": "walk-1",
      "action": "00011",
      "label": "tempo: 120 → 121",
      "records": [

@@ -36,7 +36,7 @@ One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key
 | `unit.usb` | no | `{vid, pid}` |
 | `producer` | yes | `{tool, version}`, where `tool` is `sniffer`, `app`, `cloud` or `manual` |
 | `createdAt` | yes | ISO 8601 time with offset |
-| `sources` | no | files the evidence points into, by id: `{kind, sha256?, note?}`, `kind` one of `capture`, `probe-log`, `map-checks`, `doc` |
+| `files` | no | files the evidence points into, by id: `{kind, sha256?, note?}`, `kind` one of `capture`, `probe-log`, `map-checks`, `doc` |
 | `changes` | yes | 1 to 4,096 changes |
 
 A patch names a unit by model and firmware only. It holds no person, machine, file path, MIDI port name or serial
@@ -53,7 +53,7 @@ Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f
 | `entry` | yes | the entry it covers (see Entries) |
 | `action` | yes | `add`, `repair`, `remove`, `confirm`, `suspect` or `block` |
 | `entryFp` | no | the entry's map-check fingerprint in the base map (`null`: the base has no such entry, so only for `add` and `block`); only when the seed loads |
-| `source` | for `add`, `repair`, `confirm` | the provenance the entry gets once the change is in (see Sources) |
+| `source` | for `add`, `repair`, `confirm` | the source kind the entry gets once the change is in (see Sources) |
 | `mode` | for an `@<mode>` entry or a grouped parameter | the mode the unit was in when the evidence was seen, for a map with `modes` (see Modes) |
 | `ops` | for `add`, `repair`, `remove` | 1 to 64 edits to the map (see Ops) |
 | `evidence` | yes | 1 to 64 pieces of evidence (see Evidence) |
@@ -164,17 +164,17 @@ another. Appends to one array (`-`) are each a new place, so two changes may bot
 
 | Kind | Keys | Is |
 | --- | --- | --- |
-| `capture` | `source`, `action?`, `label?`, `records?`, `frames?` | traffic the sniffer recorded between the vendor editor and the unit: the labelled step, record numbers in the capture file (from 0), and the frames copied (`{dir, bytes}`, `dir` `out` to the device, `in` from it) so the change can be reviewed without the capture |
+| `capture` | `file`, `action?`, `label?`, `records?`, `frames?` | traffic the sniffer recorded between the vendor editor and the unit: the labelled step, record numbers in the capture file (from 0), and the frames copied (`{dir, bytes}`, `dir` `out` to the device, `in` from it) so the change can be reviewed without the capture |
 | `probe` | `at`, `request`, `sent`, `replies`, `result`, `detail?` | a read-only request sent once on first contact; `result` is `shape-ok` (decoded as the seed says), `mismatch` (answered, but not as the seed says) or `silent` (no answer in time); `detail` is the decoder's difference ("cmd 31 has 16 name bytes; the seed says 12") |
 | `read-back` | `at`, `sent`, `readBack`, `result`, `echo`, `detail?` | a write, then a read of the same value; `result` `match` or `differs`; `echo` when the write sent back the value its paired read had just returned, so the sound didn't change |
-| `replay` | `at`, `result`, `source?`, `detail?` | the rebuilt entry replayed on the unit (sniffer spec S18, verify before it goes live) |
-| `device-list` | `at`, `request`, `replies`, `source?` | a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) |
+| `replay` | `at`, `result`, `file?`, `detail?` | the rebuilt entry replayed on the unit (sniffer spec S18, verify before it goes live) |
+| `device-list` | `at`, `request`, `replies`, `file?` | a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) |
 | `player` | `at`, `question`, `answer` | the player's answer where nothing can be read back ("Did the unit switch to preset 12?"), `yes`, `no` or `unsure` |
 | `freeze` | `at`, `sent`, `errorText?`, `recovery` | the unit stopped answering after a send; `recovery` `power-cycle`, `replug` or `none` |
 | `map-check` | `at`, `fp`, `outcome`, `claimed?`, `observed?`, `why?` | a line of the app's map-check log, less what the patch already says (map, firmware, entry) |
 | `doc` | `citation`, `quote?` | a vendor or third-party document; the weakest evidence |
 
-A `source` names an entry of the patch's `sources`.
+A `file` names an entry of the patch's `files`.
 
 **Who may be probed.** The app's probe runner decides which requests first contact sends to an unknown unit, never
 the patch: only messages whose `dir` is `request`, whose command appears in a list the unit reported or in the
@@ -191,7 +191,7 @@ carry none of it, a `suspect` needs some, and a `block` needs a freeze or a docu
 
 ## Sources
 
-The provenance words a change can give its entry, each backed by at least one piece of its evidence. A change claims
+The source kinds a change can give its entry, each backed by at least one piece of its evidence. A change claims
 no more trust than its evidence shows.
 
 | `source` | Backed by |
@@ -203,8 +203,14 @@ no more trust than its evidence shows.
 | `player-confirmed` | a player's `yes` |
 | `doc` | a `doc` |
 
-These are the map's provenance words (sniffer spec, Map format) plus `player-confirmed`, which is new here, from the
-first-contact design. The map's `test` provenance is for the app's own test maps and never appears in a patch.
+These are the map's source kinds (`source.kind`, device-map-protocol.md). The map ranks them, weakest first: `doc`,
+`player-confirmed`, `wire`, `device-reported`, `read-back`, `replay-verified`, `test`. A player's yes beats a document,
+since it was seen on a real unit, but doesn't check bytes the way a capture does. The map's `test` kind is for the
+app's own hardware-check runs and never appears in a patch.
+
+In a patch, "source" means only this: the kind a change gives its entry, which becomes the entry's `source.kind`. The
+files evidence points into are `files`. A measured value's `source` (how a number was measured) is a different object
+of the map's.
 
 ## Applying a patch
 
@@ -219,10 +225,31 @@ first-contact design. The map's `test` provenance is for the app's own test maps
    `suspect` names an entry the map lacks (a `block` may name one), or when its probe evidence breaks the probe rule.
 4. Keep the marks (`confirm`, `suspect`, `block`) in the reader's own per-firmware store.
 
-No op writes `provenance` (anywhere, in a path or a value) or a draft's top-level `status` and `gaps`:
-`checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. Giving the
-changed entries the change's `source` as their provenance is the reader's job; `applySeedPatch` doesn't do it yet,
-because where a map keeps per-entry provenance isn't settled.
+No op writes an entry's `source` (the map's `{kind, ref}` on a message, a parameter or a choice, in the base or a
+firmware delta), `provenance` (anywhere, in a path or a value), or a draft's top-level `status` and `gaps`:
+`checkSeedPatch` refuses them, so a change can't claim more trust than its `source` and evidence give it. A measured
+value's own `source` is not an entry's and may be written.
+
+`applySeedPatch` gives sources itself, on messages, parameters and choices (the entries the map keeps one on):
+
+- `kind` is the change's `source`, and `ref` says what the first piece of evidence that backs it was read from: a
+  document's citation, the probe's request and time, the file's id in `files` with the first 16 digits of its hash
+  (a capture, or a replay or device list that names a file), else the evidence's kind and time; at most 512
+  characters.
+- An `add` or `repair` gives its source to every message, parameter or choice its ops landed in or wrote whole, in
+  the base or the firmware delta it edited, whatever entry the change names: a section or measured edit that changes
+  a parameter changes the claim that parameter's source backs, and so does an edit of a group's own keys (its
+  `blocks`, say) for every parameter in the group. It replaces the old source, which backed the claim as it was, even
+  with a weaker one.
+- A `confirm` only raises its entry's source, in the ranking above, never lowers it, in the unit's firmware delta when
+  the delta has the entry, else in the base. It raises only what its evidence saw: not on a rebased map, not after an
+  earlier change in the patch edited the entry, not on an item its entry reaches only because of an earlier change
+  (a group's new `blocks`), and not from one block's or one mode's view of a message
+  (`<message>/<block>`, `<message>@<mode>`). The entry's bytes and fingerprint don't change, since the map leaves
+  `source` out of the fingerprint, so a raise needs no review.
+
+A draft's top-level `provenance` stays its own bookkeeping; folding it into per-entry sources is the map's move, not a
+patch's.
 
 ## What needs review
 

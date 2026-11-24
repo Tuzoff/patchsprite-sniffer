@@ -17,7 +17,7 @@ const MAX_OPS = 64;
 const MAX_EVIDENCE = 64;
 const MAX_FRAMES = 256;
 const MAX_RECORDS = 4096;
-const MAX_SOURCES = 256;
+const MAX_FILES = 256;
 const MAX_TEXT = 1024;
 /** One op's value, as canonical JSON. */
 const MAX_VALUE_CHARS = 256 << 10;
@@ -33,7 +33,7 @@ const NAME_RE = /^[a-z][A-Za-z0-9]*$/;
 const INDEX_RE = /^(0|[1-9]\d*)$/;
 const name = z.string().max(64).regex(NAME_RE, "names are camelCase");
 const firmware = z.string().max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
-const sourceId = z.string().max(64).regex(/^[a-z0-9][a-z0-9-]*$/, "source ids are lowercase letters, digits and dashes");
+const fileId = z.string().max(64).regex(/^[a-z0-9][a-z0-9-]*$/, "file ids are lowercase letters, digits and dashes");
 const u16 = z.number().int().min(0).max(0xffff);
 
 // ---- entries ------------------------------------------------------------------------------------------------------
@@ -223,7 +223,7 @@ export const EvidenceSchema = z.discriminatedUnion("kind", [
   /** traffic the sniffer recorded between the vendor editor and the unit */
   z.strictObject({
     kind: z.literal("capture"),
-    source: sourceId,
+    file: fileId,
     /** the labelled step (S3) */
     action: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).optional(),
     label: text.optional(),
@@ -256,14 +256,14 @@ export const EvidenceSchema = z.discriminatedUnion("kind", [
     detail: text.optional(),
   }),
   /** the rebuilt entry replayed on the unit (sniffer spec S18, "Verify before it goes live") */
-  z.strictObject({ kind: z.literal("replay"), at: time, result: z.enum(["match", "differs"]), source: sourceId.optional(), detail: text.optional() }),
+  z.strictObject({ kind: z.literal("replay"), at: time, result: z.enum(["match", "differs"]), file: fileId.optional(), detail: text.optional() }),
   /** a list the unit gave about itself when asked: blocks, a block's parameters, models (S17) */
   z.strictObject({
     kind: z.literal("device-list"),
     at: time,
     request: name,
     replies: z.array(hexBytes).min(1).max(MAX_RECORDS),
-    source: sourceId.optional(),
+    file: fileId.optional(),
   }),
   /** the player's answer where no read-back exists ("did the unit switch to preset 12?") */
   z.strictObject({ kind: z.literal("player"), at: time, question: text, answer: z.enum(["yes", "no", "unsure"]) }),
@@ -299,7 +299,7 @@ export const ACTIONS = ["add", "repair", "remove", "confirm", "suspect", "block"
 export type Action = (typeof ACTIONS)[number];
 
 /**
- * Where the entry's claim comes from once the change is in, the map's provenance words: `wire` (a capture),
+ * Where the entry's claim comes from once the change is in, the map's source kinds: `wire` (a capture),
  * `device-reported` (S17), `read-back` (the unit answered or read back as the map says), `replay-verified`,
  * `player-confirmed` (the player saw it happen), `doc`.
  */
@@ -345,9 +345,9 @@ export const SeedPatchSchema = z.strictObject({
   producer: z.strictObject({ tool: z.enum(["sniffer", "app", "cloud", "manual"]), version: z.string().min(1).max(64) }),
   createdAt: time,
   /** files the evidence points into, by id: a capture, a probe log, a map-check log, a document */
-  sources: z
-    .record(sourceId, z.strictObject({ kind: z.enum(["capture", "probe-log", "map-checks", "doc"]), sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(), note: text.optional() }))
-    .refine((r) => Object.keys(r).length <= MAX_SOURCES, `at most ${MAX_SOURCES} sources`)
+  files: z
+    .record(fileId, z.strictObject({ kind: z.enum(["capture", "probe-log", "map-checks", "doc"]), sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(), note: text.optional() }))
+    .refine((r) => Object.keys(r).length <= MAX_FILES, `at most ${MAX_FILES} files`)
     .optional(),
   changes: z.array(ChangeSchema).min(1).max(MAX_CHANGES),
 });
@@ -384,9 +384,32 @@ const backs: Record<Source, (e: Evidence) => boolean> = {
   doc: (e) => e.kind === "doc",
 };
 
+/** Where the map keeps an entry's `source` ({kind, ref}, device-map-protocol.md): on a message, a parameter, a choice. */
+const SOURCE_HOMES = [["messages", "*"], ["parameters", "groups", "*", "params", "*"], ["choices", "*"]] as const;
+const SOURCE_KEYS = SOURCE_HOMES.flatMap((h) => [[...h, "source"], ["firmwares", "*", ...h, "source"]]);
+
+/** A value holds something at `pat` (`*` is any key or array item, as a path's `*` matches an index too). */
+const holdsAt = (v: unknown, pat: readonly string[]): boolean => {
+  if (!pat.length) return true;
+  const [k, ...rest] = pat;
+  if (v === null || typeof v !== "object") return false;
+  return k === "*" ? Object.values(v).some((x) => holdsAt(x, rest)) : isObject(v) && Object.hasOwn(v, k) && holdsAt(v[k], rest);
+};
+
+/** An op at `segs` that puts `value` there writes an entry's `source`: it is at or under one, or its value holds one. */
+function writesSource(segs: readonly string[], value: unknown, hasValue: boolean): boolean {
+  return SOURCE_KEYS.some((pat) => {
+    for (let i = 0; i < pat.length; i++) {
+      if (i === segs.length) return hasValue && holdsAt(value, pat.slice(i));
+      if (pat[i] !== "*" && pat[i] !== segs[i]) return false;
+    }
+    return true;
+  });
+}
+
 /**
  * Rules the schema can't state: unique ids and entries, ops that fit the action and stay inside the entry's homes,
- * no two changes editing the same place, a source the evidence backs, and evidence sources that exist.
+ * no two changes editing the same place, a source the evidence backs, and evidence files that exist.
  */
 export function checkSeedPatch(p: SeedPatch): Issue[] {
   const issues: Issue[] = [];
@@ -424,6 +447,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
       if (op.op === "add" && INDEX_RE.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
       if (BOOKKEEPING.has(segs[0]) || segs.includes("provenance") || ("value" in op && keysIn(op.value).has("provenance")))
         add(`.ops[${j}]`, "provenance comes from the change's source and evidence, and status and gaps are the draft's own bookkeeping; ops never write them");
+      if (writesSource(segs, "value" in op ? op.value : undefined, "value" in op))
+        add(`.ops[${j}]`, "an entry's source comes from the change's source and evidence; ops never write it");
       const other = overlapIn(edited, segs);
       if (other !== undefined) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${other}]`);
     });
@@ -438,7 +463,7 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (c.action === "block" && !c.evidence.some((e) => e.kind === "freeze" || e.kind === "doc")) add(".evidence", "a block needs a freeze or a document naming the hazard");
 
     c.evidence.forEach((e, j) => {
-      if ("source" in e && e.source !== undefined && !Object.hasOwn(p.sources ?? {}, e.source)) add(`.evidence[${j}].source`, `no source "${e.source}" in sources`);
+      if ("file" in e && e.file !== undefined && !Object.hasOwn(p.files ?? {}, e.file)) add(`.evidence[${j}].file`, `no file "${e.file}" in files`);
     });
   });
   return issues;
@@ -699,7 +724,7 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
 export type ChangeStatus =
   /** its ops are in the map */
   | "applied"
-  /** a mark (confirm, suspect, block): the map is unchanged and the reader keeps the mark in its own store */
+  /** a mark (confirm, suspect, block): the reader keeps the mark in its own store; the map is unchanged, but for a confirm that raises the entry's source */
   | "marked"
   /** not in the accepted set */
   | "skipped"
@@ -914,6 +939,99 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   return null;
 }
 
+/** The map's source kinds, weakest first (device-map-protocol.md, `source`; agreed with the app 24 Nov 2026). */
+const SOURCE_RANK = ["doc", "player-confirmed", "wire", "device-reported", "read-back", "replay-verified", "test"];
+
+/** What the evidence that backs a change's source was read from, for the entry's `source.ref`. */
+function sourceRef(p: SeedPatch, c: Change): string | undefined {
+  const e = c.source ? c.evidence.find(backs[c.source]) : undefined;
+  if (!e) return undefined;
+  const file = "file" in e ? e.file : undefined;
+  const sha = file !== undefined && p.files && Object.hasOwn(p.files, file) ? p.files[file].sha256 : undefined;
+  const ref =
+    e.kind === "doc" ? e.citation
+    : e.kind === "probe" ? `probe ${e.request} at ${e.at}`
+    : file !== undefined ? `${e.kind} ${file}${sha ? ` sha256:${sha.slice(0, 16)}` : ""}`
+    : "at" in e ? `${e.kind} at ${e.at}` : undefined;
+  return ref?.slice(0, 512);
+}
+
+const withSource = (kind: Source, ref: string | undefined): Json => (ref ? { kind, ref } : { kind });
+
+/** The objects that keep a source (a message, a parameter, a choice) at `pat` under `path`, as concrete paths. */
+function homesUnder(doc: Json, path: string[], pat: readonly string[]): string[][] {
+  if (!pat.length) return isObject(at(doc, path)) ? [path] : [];
+  const [k, ...rest] = pat;
+  const v = at(doc, path);
+  if (!isObject(v)) return [];
+  return (k === "*" ? Object.keys(v) : Object.hasOwn(v, k) ? [k] : []).flatMap((x) => homesUnder(doc, [...path, x], rest));
+}
+
+/** Where a path is in a source home: the home it is in, or the homes it holds, in the base or a firmware delta. */
+function sourceHomesOf(doc: Json, segs: readonly string[]): string[][] {
+  const fws = segs[0] === "firmwares" ? (segs.length >= 2 ? [segs[1]] : Object.keys((at(doc, ["firmwares"]) as Record<string, Json>) ?? {})) : [undefined];
+  return fws.flatMap((fw) => {
+    const prefix = fw === undefined ? [] : ["firmwares", fw];
+    const own = fw === undefined ? segs : segs.slice(2);
+    // a group's own keys (its blocks, say) are part of every one of its parameters' claim
+    if (own.length >= 4 && own[0] === "parameters" && own[1] === "groups" && own[3] !== "params")
+      return homesUnder(doc, [...prefix, ...own.slice(0, 3)], ["params", "*"]);
+    return SOURCE_HOMES.flatMap((home) => {
+      const n = Math.min(own.length, home.length);
+      if (!home.slice(0, n).every((x, i) => x === "*" || x === own[i])) return [];
+      // in a home: that one; above homes: every one it holds
+      return own.length >= home.length ? [[...prefix, ...own.slice(0, home.length)]] : homesUnder(doc, [...prefix, ...own], home.slice(own.length));
+    });
+  });
+}
+
+/**
+ * An edit gives its source to every message, parameter or choice its ops landed in or wrote whole, whatever entry
+ * the change names (a section or measured edit that changes a parameter changes the claim the parameter's source
+ * backs). It replaces the old source, which backed the claim as it was.
+ */
+function giveEditSource(doc: Json, p: SeedPatch, c: Change, landed: readonly string[][]): void {
+  if (c.source === undefined) return;
+  const ref = sourceRef(p, c);
+  const done = new Set<string>();
+  for (const l of landed)
+    for (const h of sourceHomesOf(doc, l)) {
+      const key = h.join(SEP);
+      const entry = at(doc, h);
+      if (done.has(key) || !isObject(entry)) continue;
+      done.add(key);
+      entry.source = withSource(c.source, ref);
+    }
+}
+
+/**
+ * A confirm raises its entry's source, never lowers it, and only when the evidence is about the entry as it now is:
+ * on the map the patch was made against, with no earlier change in the patch having edited it, and for the whole
+ * entry (not one block's or one mode's view of a message). It lands in the unit's firmware delta when the delta has the
+ * entry, else in the base.
+ */
+function raiseSource(doc: Json, input: Json, p: SeedPatch, c: Change, paths: string[][], standIns: ReadonlySet<string>): void {
+  const e = parseEntry(c.entry);
+  if (c.source === undefined || !e || (e.kind === "message" && (e.block !== undefined || e.mode !== undefined))) return;
+  // the entry as the evidence saw it: an earlier change may have made the name reach another item (a group's blocks)
+  const seen = new Set(entryPaths(input, c.entry, p.unit.firmware, standIns).map((h) => h.join(SEP)));
+  // only paths that are a home themselves; a section's path holds homes but is none
+  const homes = paths.filter((h) => {
+    if (!seen.has(h.join(SEP))) return false;
+    const own = h[0] === "firmwares" ? h.slice(2) : h;
+    return SOURCE_HOMES.some((home) => own.length === home.length && home.every((x, i) => x === "*" || x === own[i]));
+  });
+  const delta = homes.filter((h) => h[0] === "firmwares");
+  const ref = sourceRef(p, c);
+  const claim = (v: Json | undefined) => (isObject(v) ? fingerprint({ ...v, source: undefined }) : undefined);
+  for (const h of delta.length ? delta : homes) {
+    const entry = at(doc, h);
+    if (!isObject(entry) || claim(entry) !== claim(at(input, h))) continue;
+    const had = isObject(entry.source) && typeof entry.source.kind === "string" ? SOURCE_RANK.indexOf(entry.source.kind) : -1;
+    if (SOURCE_RANK.indexOf(c.source) > had) entry.source = withSource(c.source, ref);
+  }
+}
+
 /**
  * Apply a checked patch to a copy of the map, change by change, each all or nothing. `accept` limits it to the
  * changes a review accepted. A change whose ops no longer fit (a `was` that doesn't match) is left out as stale,
@@ -949,6 +1067,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");
+      if (c.action === "confirm" && !rebased) raiseSource(doc, map as Json, p, c, before, standIns);
       return { change: c.id, status: "marked" };
     }
     // an add is for an entry the map lacks: one it has was added since the patch was made, or the add is a repair
@@ -972,6 +1091,7 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
       rollBack(undo);
       return refused(c, why ?? `${c.ops[stray].path} is not where ${c.entry} is`);
     }
+    giveEditSource(doc, p, c, landed);
     return { change: c.id, status: "applied" };
   });
   return { map: doc, rebased, results };
