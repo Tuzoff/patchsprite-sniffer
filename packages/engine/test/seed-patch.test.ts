@@ -386,12 +386,21 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.deepEqual(parseEntry("setBypass@bass/amp"), { kind: "message", message: "setBypass", block: "amp", mode: "bass" });
   assert.deepEqual(parseEntry("param/amp/1/bass_amp"), { kind: "param", block: "amp", id: 1, group: "bass_amp" });
   assert.deepEqual(parseEntry("modes"), { kind: "section", section: "modes" });
-  for (const bad of ["getPreset@", "getPreset@a@b", "@bass", "transport@bass", "param/amp/1/x/y", "param/amp/1/Bad-group"]) assert.equal(parseEntry(bad), null, bad);
+  for (const bad of ["getPreset@", "getPreset@a@b", "@bass", "transport@bass", "param@bass", "linked@bass", "messages@bass", "status@bass", "param/amp/1/x/y", "param/amp/1/Bad-group"])
+    assert.equal(parseEntry(bad), null, bad);
+  assert.deepEqual(parseEntry("linked/bassAmp/gain_pair"), { kind: "linked", group: "bassAmp", set: "gain_pair" }, "a linked set's group is named as a param's is");
 
   const confirm: Change = { id: "c", entry: "getPreset@bass", action: "confirm", source: "read-back", evidence: [probeOk] };
   assert.match(messages(withChanges(confirm))[0], /must be seen in that mode/);
   assert.match(messages(withChanges({ ...confirm, mode: "guitar" }))[0], /must be seen in that mode/);
   assert.deepEqual(messages(withChanges({ ...confirm, mode: "bass" })), []);
+  // a mode's entry can't make a message of a top-level key's name either
+  const modeMsg: Change = { id: "c", entry: "fooBar@bass", action: "add", source: "wire", mode: "bass", ops: [{ op: "add", path: "/messages/fooBar", value: { cmd: "50", dir: "request" } }], evidence: [capture] };
+  assert.equal(applySeedPatch(seed(), withChanges(modeMsg)).results[0].status, "applied");
+  assert.match(applySeedPatch({ ...seed(), fooBar: {} }, withChanges(modeMsg)).results[0].why!, /fooBar is both a message and a top-level section/);
+  const both = { ...seed(), fooBar: {}, messages: { ...seed().messages, fooBar: { cmd: "50", dir: "request" } } };
+  for (const entry of ["fooBar@bass", "fooBar/amp", "fooBar@bass/amp"])
+    assert.match(applySeedPatch(both, withChanges({ ...confirm, entry, mode: "bass" })).results[0].why!, /both a message and a top-level section/, entry);
 
   // a map with a bass mode whose amp group stands in for the guitar one
   const map = seed();
@@ -401,6 +410,8 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.deepEqual(entryPaths(map, "param/amp/1", fw), [["parameters", "groups", "amp", "params", "gain"]]);
   assert.deepEqual(entryPaths(map, "param/amp/1/bass_amp", fw), [["parameters", "groups", "bass_amp", "params", "gain"]]);
   assert.deepEqual(entryPaths(map, "param/amp/1/amp", fw), [], "the fourth part names a stand-in group");
+  const selfMapped = { ...map, modes: { use: { guitar: { groups: { amp: "amp" } } } } };
+  assert.deepEqual(entryPaths(selfMapped, "param/amp/1", fw)[0], ["parameters", "groups", "amp", "params", "gain"], "a group mapped to itself stands in for no other");
   const wrongGroup: Change = { id: "c", entry: "param/amp/1/bass_amp", action: "repair", source: "wire", mode: "bass", ops: [{ op: "replace", path: "/parameters/groups/amp/params/gain/kind", value: "slider", was: fingerprint("knob") }], evidence: [capture] };
   assert.match(messages(withChanges(wrongGroup))[0], /outside entry/);
   const rightGroup: Change = { ...wrongGroup, ops: [{ op: "replace", path: "/parameters/groups/bass_amp/params/gain/kind", value: "slider", was: fingerprint("knob") }] };

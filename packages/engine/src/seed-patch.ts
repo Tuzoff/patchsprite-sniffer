@@ -78,11 +78,15 @@ export type Entry =
 
 const BLOCK_RE = /^[a-z][A-Za-z0-9_]*$/;
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
+/** A parameter group's key, as `param/<block>/<id>/<group>` and `linked/<group>/<set>` name it. */
+const isGroup = (s: string) => s.length <= 64 && (KEY_RE.test(s) || NAME_RE.test(s));
 
 /**
  * An entry name, as the app's map checks write it (docs/design/map-checks.md in the app) plus the kinds a patch also
- * needs: `<message>`, `<message>/<block>`, `param/<block>/<id>`, `choice/<name>`, then `layout/<name>`, `enum/<name>`,
- * `constant/<name>`, `control/<name>`, `setting/<id>` and the section names. Null when it is none of these.
+ * needs: `<message>`, `<message>/<block>`, `<message>@<mode>`, `<message>@<mode>/<block>`, `param/<block>/<id>`,
+ * `param/<block>/<id>/<group>`, `choice/<name>`, then `layout/<name>`, `enum/<name>`, `constant/<name>`,
+ * `control/<name>`, `setting/<id>`, `linked/<group>/<set>`, `measured/<field>` and the section names. Null when it is
+ * none of these.
  */
 export function parseEntry(entry: string): Entry | null {
   if (entry.length > 160) return null;
@@ -91,7 +95,7 @@ export function parseEntry(entry: string): Entry | null {
   // never in a section only finer entries cover (another firmware's delta, a message) or in a draft's bookkeeping
   if (head === "measured")
     return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) && (SECTION_ENTRIES as readonly string[]).includes(a.split(".")[0]) ? { kind: "measured", field: a } : null;
-  if (head === "linked") return parts.length === 3 && KEY_RE.test(a) && KEY_RE.test(b) && a.length <= 64 && b.length <= 64 ? { kind: "linked", group: a, set: b } : null;
+  if (head === "linked") return parts.length === 3 && isGroup(a) && KEY_RE.test(b) && b.length <= 64 ? { kind: "linked", group: a, set: b } : null;
   if (RESERVED_TOP.has(head)) return null;
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
@@ -99,13 +103,14 @@ export function parseEntry(entry: string): Entry | null {
   if (head === "param") {
     if ((parts.length !== 3 && parts.length !== 4) || !BLOCK_RE.test(a) || !/^(0|[1-9]\d{0,4})$/.test(b)) return null;
     if (parts.length === 3) return { kind: "param", block: a, id: Number(b) };
-    return KEY_RE.test(parts[3]) || NAME_RE.test(parts[3]) ? { kind: "param", block: a, id: Number(b), group: parts[3] } : null;
+    return isGroup(parts[3]) ? { kind: "param", block: a, id: Number(b), group: parts[3] } : null;
   }
   // `<message>@<mode>`, `<message>@<mode>/<block>`
   const [message, mode, ...more] = head.split("@");
   if (more.length || (mode !== undefined && (!BLOCK_RE.test(mode) || mode.length > 64))) return null;
   if (!NAME_RE.test(message) || message.length > 64) return null;
-  if (mode !== undefined && (SECTION_ENTRIES as readonly string[]).includes(message)) return null;
+  // `param@x` and the like name no message, just as a bare `param` doesn't
+  if (mode !== undefined && RESERVED_WORDS.includes(message)) return null;
   const tagged = mode === undefined ? {} : { mode };
   if (parts.length === 1) return { kind: "message", message, ...tagged };
   return parts.length === 2 && BLOCK_RE.test(a) && a.length <= 64 ? { kind: "message", message, block: a, ...tagged } : null;
@@ -310,7 +315,7 @@ export const ChangeSchema = z.strictObject({
   entryFp: fp16.nullable().optional(),
   source: z.enum(SOURCES).optional(),
   /** the mode the unit was in when the evidence was seen, for a map with modes; an `@<mode>` entry needs its own */
-  mode: z.string().max(64).regex(/^[a-z][A-Za-z0-9_]*$/).optional(),
+  mode: z.string().max(64).regex(BLOCK_RE).optional(),
   ops: z.array(OpSchema).min(1).max(MAX_OPS).optional(),
   evidence: z.array(EvidenceSchema).min(1).max(MAX_EVIDENCE),
   /** for the reviewer, never shown to the chat model */
@@ -649,14 +654,14 @@ function applyOp(doc: Json, op: Op, undo: Undo, landed: string[][]): string | nu
   return null;
 }
 
-/** The parameter groups that stand in for another in some mode (`modes.use.<mode>.groups`). */
+/** The parameter groups that stand in for another in some mode (`modes.use.<mode>.groups`); one mapped to itself doesn't. */
 function standInGroups(doc: Json): Set<string> {
   const out = new Set<string>();
   const use = at(doc, ["modes", "use"]);
   if (isObject(use))
     for (const u of Object.values(use)) {
       const g = isObject(u) ? u.groups : undefined;
-      if (isObject(g)) for (const v of Object.values(g)) if (typeof v === "string") out.add(v);
+      if (isObject(g)) for (const [k, v] of Object.entries(g)) if (typeof v === "string" && v !== k) out.add(v);
     }
   return out;
 }
@@ -743,12 +748,15 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     if (accept && !accept.has(c.id)) return { change: c.id, status: "skipped" };
     const probe = unsafeProbe(probed, c);
     if (probe) return refused(c, probe);
-    const kind = parseEntry(c.entry)?.kind;
+    const e = parseEntry(c.entry);
+    const kind = e?.kind;
     const before = entryPaths(doc, c.entry, fw);
-    // a bare name is the message or the top-level section, never both: in the map, or once the ops have run
-    if (kind === "message") {
+    // a bare name is the message or the top-level section, never both: in the map, or once the ops have run; an entry
+    // with a block or a mode never covers the section, so a top-level key of its message's name counts on its own
+    if (e?.kind === "message") {
       const top = [...before.map((h) => h.length === 1), ...(c.ops ?? []).map((op) => splitPointer(op.path)[0] === c.entry)];
-      if (top.includes(true) && top.includes(false)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
+      if ((e.block !== undefined || e.mode !== undefined) && at(doc, [e.message]) !== undefined) top.push(true);
+      if (top.includes(true) && top.includes(false)) return refused(c, `${e.message} is both a message and a top-level section of the map`);
     }
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !before.length) return refused(c, "the map has no such entry to mark");

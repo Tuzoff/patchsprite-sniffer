@@ -97,7 +97,7 @@ map-check record about the same entry use the same name.
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 | `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
 
-The first four kinds are the app's; the rest are new here. **Every top-level key of a map is an entry**: the sections
+The first six kinds are the app's; the rest are new here. A `<mode>` is a name like a block's (`^[a-z][A-Za-z0-9_]*$`, at most 64 characters), and a `<group>` is the parameter group's key. **Every top-level key of a map is an entry**: the sections
 above by name, and any other key (a section a newer map or a draft has) by its key alone, when the key is a camelCase
 name (`^[a-z][A-Za-z0-9]*$`, at most 64 characters) and not a word that starts another kind of entry. The exceptions are the keys
 only ever covered by finer entries (`messages`, `layouts`, `enums`, `constants`, `choices`, `firmwares`, `schema`) and
