@@ -88,14 +88,24 @@ map-check record about the same entry use the same name.
 | `constant/<name>` | a named constant | `/constants/<name>`, `/firmwares/<fw>/constants/<name>` |
 | `control/<name>` | a MIDI channel control | `/controls/items/<name>` |
 | `setting/<id>` | a global setting | `/settings/items/*` |
-| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls` | that whole section | `/<section>` |
+| `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`) | the field's own path (`/transport/timing/compareToggle`) |
+| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
+| `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
 
-The first four kinds are the app's; the rest are new here. `identity` is the proposed key for the unit's identity
-reply, `session` for what is sent when a port opens (`onConnect`) and `hazards` for the seed's hazard list. The whole
-`parameters` section covers a parameter group that doesn't say which blocks it serves, and the whole `controls`
-section covers the channel and preset settings outside `controls.items`. The words that start a kind (`param`,
-`setting`, `choice`, `layout`, `enum`, `constant`, `control` and the section names) are never message names.
+The first four kinds are the app's; the rest are new here. **Every top-level key of a map is an entry**: the sections
+above by name, and any other key (a section a newer map or a draft has) by its key alone. The exceptions are the keys
+only ever covered by finer entries (`messages`, `layouts`, `enums`, `constants`, `choices`, `firmwares`, `schema`) and
+a draft's own bookkeeping (`status`, `gaps`, `provenance`), which are never entries. `identity` is the proposed key for
+the unit's identity reply, `session` for what is sent when a port opens (`onConnect`), `hazards` for the seed's hazard
+list and `addresses` for address-based framings. The whole `parameters` section covers a parameter group that doesn't
+say which blocks it serves, and the whole `controls` section covers the channel and preset settings outside
+`controls.items`.
+
+A bare name is a message or, when the map has a top-level key of that name, that section. So no message is named
+like a section or a word that starts another kind of entry (`param`, `setting`, `measured`, `choice`, `layout`,
+`enum`, `constant`, `control`), nor like any top-level key of its own map; when a map breaks that, a change naming
+it is `refused` as ambiguous. A change to a top-level section this engine doesn't know always needs review.
 
 A change's ops stay inside its entry's homes. `<fw>` is the unit's own firmware: evidence from one firmware changes
 the base map or that firmware's delta, never another firmware's. After the ops run, the applier checks that the entry
@@ -202,7 +212,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
   fingerprint, so only review catches them);
-- the framing (`/transport`), which every message depends on;
+- the framing (`/transport`, except a `measured/...` value in it), which every message depends on;
+- any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;

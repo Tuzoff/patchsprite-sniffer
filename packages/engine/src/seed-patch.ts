@@ -38,15 +38,31 @@ const u16 = z.number().int().min(0).max(0xffff);
 
 // ---- entries ------------------------------------------------------------------------------------------------------
 
-/** Whole sections a change may cover as one entry. */
-export const SECTION_ENTRIES = ["transport", "host", "identity", "driver", "session", "safety", "blocked", "hazards", "scratch", "audio", "display", "parameters", "controls"] as const;
+/**
+ * The map's top-level keys this engine knows that a change may cover whole. Any other top-level key, such as a section
+ * a newer map or a draft has, is a whole-section entry too, named by its key alone (see parseEntry).
+ */
+export const SECTION_ENTRIES = [
+  "transport", "host", "identity", "driver", "session", "safety", "blocked", "hazards", "scratch", "audio", "display",
+  "parameters", "controls", "settings", "eq", "addresses", "editor",
+] as const;
+/** Top-level keys only ever covered by finer entries (`<message>`, `layout/<name>` and so on), never whole. */
+export const FINE_SECTIONS = ["messages", "layouts", "enums", "constants", "choices", "firmwares", "schema"] as const;
 /** Kinds of entry written `<kind>/<name>`. */
 export const NAMED_KINDS = ["choice", "layout", "enum", "constant", "control"] as const;
-/** Words a map may not name a message, since they start other kinds of entry (parseEntry never reads them as one). */
-export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...NAMED_KINDS, "param", "setting"];
+/** A draft's own bookkeeping at its top level, which no op writes. */
+const BOOKKEEPING = new Set(["status", "gaps", "provenance"]);
+/**
+ * Words that never name a message, since they name a section or start another kind of entry (parseEntry never reads
+ * them as one). A map's messages also never share a name with any of its own top-level keys.
+ */
+export const RESERVED_WORDS: readonly string[] = [...SECTION_ENTRIES, ...FINE_SECTIONS, ...NAMED_KINDS, ...BOOKKEEPING, "param", "setting", "measured"];
 
 export type Entry =
+  /** a message, or a top-level section this engine doesn't know by that name, whichever the map has */
   | { kind: "message"; message: string; block?: string }
+  /** a measured value, by its dotted path (`transport.timing.compareToggle`) */
+  | { kind: "measured"; field: string }
   | { kind: "param"; block: string; id: number }
   | { kind: "setting"; id: string }
   | { kind: (typeof NAMED_KINDS)[number]; name: string }
@@ -64,6 +80,8 @@ export function parseEntry(entry: string): Entry | null {
   if (entry.length > 160) return null;
   const parts = entry.split("/");
   const [head, a, b] = parts;
+  if (head === "measured") return parts.length === 2 && /^[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*){1,7}$/.test(a) ? { kind: "measured", field: a } : null;
+  if ((FINE_SECTIONS as readonly string[]).includes(head) || BOOKKEEPING.has(head)) return null;
   if ((SECTION_ENTRIES as readonly string[]).includes(head)) return parts.length === 1 ? { kind: "section", section: head as (typeof SECTION_ENTRIES)[number] } : null;
   if ((NAMED_KINDS as readonly string[]).includes(head)) return parts.length === 2 && NAME_RE.test(a) ? { kind: head as (typeof NAMED_KINDS)[number], name: a } : null;
   if (head === "setting") return parts.length === 2 && KEY_RE.test(a) ? { kind: "setting", id: a } : null;
@@ -83,7 +101,10 @@ const FW = "$fw";
 export function entryHomes(e: Entry): string[][] {
   switch (e.kind) {
     case "message":
-      return [["messages", e.message], ["firmwares", FW, "messages", e.message]];
+      // a bare name is also a top-level section this engine doesn't know (a draft's own, or a newer map's)
+      return e.block === undefined ? [["messages", e.message], ["firmwares", FW, "messages", e.message], [e.message]] : [["messages", e.message], ["firmwares", FW, "messages", e.message]];
+    case "measured":
+      return [e.field.split(".")];
     case "param":
       return [["parameters", "groups", "*", "params", "*"]];
     case "setting":
@@ -315,8 +336,6 @@ export interface Issue {
 }
 
 const EDITS: readonly Action[] = ["add", "repair", "remove"];
-/** A draft map's own bookkeeping at its top level, which no op writes. */
-const BOOKKEEPING = new Set(["status", "gaps", "provenance"]);
 
 /** Evidence against the entry as the base map has it. */
 const contradicts = (e: Evidence): boolean =>
@@ -434,6 +453,8 @@ const formatPath = (path: readonly PropertyKey[]) => path.map((k, i) => (typeof 
 // ---- review ---------------------------------------------------------------------------------------------------------
 
 const SAFETY_KEYS = new Set(["safety", "blocked", "hazards"]);
+/** Top-level keys whose risks the reasons below know; a change to any other section can't be judged, so it's reviewed. */
+const KNOWN_TOP = new Set<string>([...SECTION_ENTRIES, ...FINE_SECTIONS]);
 const WRITE_RANGE_KEYS = new Set(["allowed", "writable", "min", "max", "saturate", "readOnly"]);
 /** Keys that decide what first contact sends to an unknown unit and whether a write counts as verified. */
 const PROBE_KEYS = new Set(["safeRead", "readBack"]);
@@ -482,7 +503,8 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
-      if (segs[0] === "transport") reasons.add("changes the framing of every message");
+      if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
+      if (segs[0] === "transport" && parseEntry(c.entry)?.kind !== "measured") reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
@@ -671,6 +693,8 @@ export function applySeedPatch(map: unknown, p: SeedPatch, accept?: ReadonlySet<
     if (accept && !accept.has(c.id)) return { change: c.id, status: "skipped" };
     const probe = unsafeProbe(probed, c);
     if (probe) return refused(c, probe);
+    const found = entryPaths(doc, c.entry, fw);
+    if (parseEntry(c.entry)?.kind === "message" && found.some((h) => h.length === 1) && found.some((h) => h.length > 1)) return refused(c, `${c.entry} is both a message and a top-level section of the map`);
     if (!c.ops) {
       if ((c.action === "confirm" || c.action === "suspect") && !hasEntry(doc, c.entry, fw)) return refused(c, "the map has no such entry to mark");
       return { change: c.id, status: "marked" };

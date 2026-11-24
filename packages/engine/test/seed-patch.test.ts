@@ -321,3 +321,32 @@ test("a repair may open the unit's own firmware delta", () => {
   assert.equal(results[0].status, "applied");
   assert.deepEqual((map as ReturnType<typeof seed>).firmwares["1.20"].messages.nameReply, { cmd: "31", dir: "reply" });
 });
+
+test("every top-level key is an entry: known sections, a draft's own sections, measured values", () => {
+  assert.deepEqual(parseEntry("addresses"), { kind: "section", section: "addresses" });
+  assert.deepEqual(parseEntry("measured/transport.timing.compareToggle"), { kind: "measured", field: "transport.timing.compareToggle" });
+  for (const bad of ["messages", "layouts", "firmwares", "schema", "status", "gaps", "provenance", "measured", "measured/audio", "measured/Audio.x"]) assert.equal(parseEntry(bad), null, bad);
+
+  // a draft's own section, by its key alone
+  const map = { ...seed(), addressMap: { patch: "10 00" } };
+  const draftKey: Change = { id: "c", entry: "addressMap", action: "repair", source: "wire", ops: [{ op: "replace", path: "/addressMap/patch", value: "11 00", was: fingerprint("10 00") }], evidence: [capture] };
+  const p = withChanges(draftKey);
+  assert.deepEqual(messages(p), []);
+  assert.equal(applySeedPatch(map, p).results[0].status, "applied");
+  assert.deepEqual(reviewReasons(p, map).map((r) => r.reason), ["changes a map section this engine doesn't know"]);
+  assert.match(messages(withChanges({ ...draftKey, ops: [{ op: "add", path: "/other/x", value: 1 }] }))[0], /outside entry addressMap/);
+
+  // a name that is both a message and a top-level section can't be told apart
+  const both = { ...map, messages: { ...map.messages, addressMap: { cmd: "50", dir: "request" } } };
+  assert.match(applySeedPatch(both, p).results[0].why!, /both a message and a top-level section/);
+  // whole sections with a firmware delta are not ambiguous
+  const safety = { ...seed(), safety: { rules: [] }, firmwares: { "1.20": { safety: { modelChangeScenes: [1] } } } };
+  const confirmSafety: Change = { id: "c", entry: "safety", action: "confirm", source: "doc", evidence: [{ kind: "doc", citation: "manual" }] };
+  assert.equal(applySeedPatch(safety, withChanges(confirmSafety)).results[0].status, "marked");
+
+  // a measured value, written where its dotted path says
+  const measured: Change = { id: "c", entry: "measured/transport.timing.compareToggle", action: "add", source: "wire", ops: [{ op: "add", path: "/transport/timing/compareToggle", value: { value: 420, unit: "ms", measuredOn: "acme fx-1", date: "2026-11-24", source: "sniffer-capture" } }], evidence: [capture] };
+  assert.deepEqual(messages(withChanges(measured)), []);
+  assert.equal(applySeedPatch(seed(), withChanges(measured)).results[0].status, "applied");
+  assert.match(messages(withChanges({ ...measured, ops: [{ op: "add", path: "/transport/timing/frameGapMs", value: 1 }] }))[0], /outside entry/);
+});
