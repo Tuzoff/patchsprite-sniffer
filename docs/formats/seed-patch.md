@@ -134,7 +134,8 @@ as the reviewer saw it:
 - a grouped parameter (`param/<block>/<id>/<group>`) needs a mode whose `groups` stand that group in;
 - a plain entry seen in a mode where another entry stands in for it (`modes.use.<mode>.messages` or `.groups`) is
   `refused`, since the evidence is about the stand-in;
-- a mode the map doesn't use is `refused`.
+- a mode the map doesn't use is `refused`, except on a plain entry when the map has no `modes` at all: there the
+  mode changes nothing the entry means, so it is ignored.
 
 Which groups stand in is read from the map before the patch, so a `modes` change earlier in a patch doesn't change
 what later entries in it mean.

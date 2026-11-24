@@ -423,13 +423,18 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
   assert.equal(applySeedPatch({ ...seed(), ...bassMode }, withChanges({ ...confirm, mode: "bass" })).results[0].status, "marked");
   const { mode: _m, ...noMode } = rightGroup;
   assert.match(applySeedPatch(map, withChanges(noMode)).results[0].why!, /needs the mode it was seen in/);
+  assert.match(messages(withChanges(noMode))[0], /needs the mode it was seen in/, "checked without a map too");
   map.modes.use.guitar = {};
   assert.match(applySeedPatch(map, withChanges({ ...rightGroup, mode: "guitar" })).results[0].why!, /stands in for none in mode guitar/);
+  map.modes.use.guitar = { groups: { bass_amp: "bass_amp" } };
+  assert.match(applySeedPatch(map, withChanges({ ...rightGroup, mode: "guitar" })).results[0].why!, /stands in for none in mode guitar/, "a group mapped to itself stands in for none");
+  map.modes.use.guitar = {};
   const plainInBass: Change = { id: "c", entry: "param/amp/1", action: "confirm", source: "wire", mode: "bass", evidence: [capture] };
   assert.match(applySeedPatch(map, withChanges(plainInBass)).results[0].why!, /in mode bass, bass_amp stands in for group amp/);
   assert.equal(applySeedPatch(map, withChanges({ ...plainInBass, mode: "guitar" })).results[0].status, "marked");
   map.modes.use.bass.messages = { getPreset: "getPresetBass" };
   assert.match(applySeedPatch(map, withChanges({ ...plainInBass, entry: "getPreset", source: "read-back", evidence: [probeOk] })).results[0].why!, /getPresetBass stands in for getPreset/);
+  assert.equal(applySeedPatch(seed(), withChanges({ ...plainInBass, entry: "getPreset", source: "read-back", evidence: [probeOk] })).results[0].status, "marked", "a map without modes ignores a plain entry's mode");
 
   const modes: Change = { id: "c", entry: "modes", action: "repair", source: "wire", ops: [{ op: "replace", path: "/modes/use/bass/groups/amp", value: "amp", was: fingerprint("bass_amp") }], evidence: [capture] };
   assert.deepEqual(reviewReasons(withChanges(modes), map).map((r) => r.reason), ["changes which entries a mode uses"]);

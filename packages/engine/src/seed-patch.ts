@@ -403,6 +403,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     const entry = parseEntry(c.entry)!;
     if (entry.kind === "message" && entry.mode !== undefined && c.mode !== entry.mode)
       add(".mode", `${c.entry} is the message as mode ${entry.mode} reads it, so its evidence must be seen in that mode`);
+    if (entry.kind === "param" && entry.group !== undefined && c.mode === undefined)
+      add(".mode", `${c.entry} is in a stand-in group, so its change needs the mode it was seen in`);
 
     const isEdit = EDITS.includes(c.action);
     if (isEdit && !c.ops) add(".ops", `${c.action} needs ops`);
@@ -743,14 +745,14 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   const standsIn = (u: Record<string, Json>, kind: "messages" | "groups", name: string) => {
     const t = u[kind];
     const v = isObject(t) && Object.hasOwn(t, name) ? t[name] : undefined;
-    return v !== undefined && v !== name ? String(v) : undefined;
+    return typeof v === "string" && v !== name ? v : undefined;
   };
   if (e?.kind === "message" && e.mode !== undefined) return modeOf(e.mode) ? null : `the map has no mode ${e.mode}`;
   if (e?.kind === "param" && e.group !== undefined) {
     const u = modeOf(mode);
     if (!u) return `a parameter of the stand-in group ${e.group} needs the mode it was seen in, one the map uses`;
     const g = u.groups;
-    return isObject(g) && Object.values(g).includes(e.group) ? null : `group ${e.group} stands in for none in mode ${mode}`;
+    return isObject(g) && Object.entries(g).some(([k, v]) => v === e.group && k !== v) ? null : `group ${e.group} stands in for none in mode ${mode}`;
   }
   if (mode === undefined || !e) return null;
   const u = modeOf(mode);
