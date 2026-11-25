@@ -12,3 +12,16 @@ The CLA applies to every part of this repository, including the shared engine pa
 
 - No vendor files, firmware, or vendor software.
 - No device mappings (parameter maps, offset tables, or similar).
+
+## Checks on your pull request
+
+- **`test`**: type check and unit tests, on GitHub's runners (`npm ci && npm run typecheck && npm test`).
+- **`leak-check`**: Patchsprite's closed CI scans this repository for private content (device maps and their
+  recordings, protocol codes, vendor files) and posts the result here. It runs on a schedule, so a new push gets its
+  status within about 15 minutes, and sometimes later. On a pull request from a fork it stays pending until a
+  maintainer has reviewed the current commit, so it can't be used to test guesses at private content. A failure says
+  only that something matched, never what; a maintainer will tell you what to change.
+- **CLA**: CLA Assistant, as above.
+
+Pull request titles, descriptions, comments and issues are public but not scanned, so don't paste captures, SysEx
+dumps or vendor files into them. Use the sniffer's upload to share a capture with us.
