@@ -31,7 +31,7 @@ One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key
 | `map` | yes | the seed it changes, `<make>/<device>` as the map folder names it (`acme/fx-1`) |
 | `base.file` | yes | fingerprint of the seed file's JSON as written (see Fingerprints), so a draft that doesn't load yet still has one |
 | `base.mapVersion` | no | the map's `mapVersion` as the app's map checks compute it, when the seed loads |
-| `unit.firmware` | yes | the firmware the unit reports, as the map spells it |
+| `unit.firmware` | yes | the firmware the unit reports, as the map spells it, or `unknown` when it reports none (see below) |
 | `unit.identity` | no | the MIDI universal identity reply, as received bytes |
 | `unit.usb` | no | `{vid, pid}` |
 | `producer` | yes | `{tool, version}`, where `tool` is `sniffer`, `app`, `cloud` or `manual` |
@@ -42,6 +42,14 @@ One JSON object, at most 4 MiB, nested at most 100 deep, with no `__proto__` key
 A patch names a unit by model and firmware only. It holds no person, machine, file path, MIDI port name or serial
 number, like the app's map-check records. One patch covers one unit and one firmware; the cloud counts units by
 combining patches.
+
+A unit whose map has no firmware message (a param-change map may leave `firmwareVersion` out when its `firmwares`
+change nothing) reports no firmware; the app then reads it with the base map and keeps its map checks under
+`unknown`, so a patch from it says `"firmware": "unknown"`. Such a patch's changes edit only the base map: an op under
+`/firmwares/...` is refused, since no firmware's delta is known to be the unit's. Its marks (`confirm`, `suspect`,
+`block`) are for `unknown`, and the reader keeps them apart from every known firmware's, as the app does. When the
+unit answers the MIDI universal identity request, its reply (`unit.identity`) usually carries the firmware, so a
+producer reads it from there before falling back to `unknown`.
 
 Bytes are written as in maps: lowercase hex pairs separated by single spaces (`f0 7d 01 10 f7`).
 

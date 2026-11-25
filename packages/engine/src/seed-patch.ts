@@ -33,6 +33,12 @@ const NAME_RE = /^[a-z][A-Za-z0-9]*$/;
 const INDEX_RE = /^(0|[1-9]\d*)$/;
 const name = z.string().max(64).regex(NAME_RE, "names are camelCase");
 const firmware = z.string().max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+
+/**
+ * The firmware a patch names when the unit reports none (a map with no firmwareVersion message): the app keeps such a
+ * unit's map checks under this name, and its evidence edits only the base map, never a firmware's delta.
+ */
+export const UNKNOWN_FIRMWARE = "unknown";
 const fileId = z.string().max(64).regex(/^[a-z0-9][a-z0-9-]*$/, "file ids are lowercase letters, digits and dashes");
 const u16 = z.number().int().min(0).max(0xffff);
 
@@ -337,7 +343,7 @@ export const SeedPatchSchema = z.strictObject({
   }),
   /** the unit the evidence came from: a model and firmware, never a person, machine, path or port name */
   unit: z.strictObject({
-    /** as the unit reports it and the map spells it */
+    /** as the unit reports it and the map spells it, or "unknown" when the unit reports none (UNKNOWN_FIRMWARE) */
     firmware,
     /** the MIDI universal identity reply as received */
     identity: hexBytes.optional(),
@@ -443,6 +449,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     c.ops?.forEach((op, j) => {
       const segs = opSegs[j];
       if (!homes.some((h) => underHome(segs, h, p.unit.firmware))) add(`.ops[${j}].path`, `${op.path} is outside entry ${c.entry} (or in another firmware's delta)`);
+      if (p.unit.firmware === UNKNOWN_FIRMWARE && segs[0] === "firmwares")
+        add(`.ops[${j}].path`, "the unit's firmware is unknown, so its evidence edits only the base map, never a firmware's delta");
       if (c.action === "add" && op.op !== "add") add(`.ops[${j}].op`, "an add only adds");
       if (c.action === "remove" && op.op !== "remove") add(`.ops[${j}].op`, "a remove only removes");
       if (op.op === "add" && INDEX_RE.test(segs[segs.length - 1])) add(`.ops[${j}].path`, "add appends to an array with -; to change an array in the middle, replace it whole");
