@@ -20,8 +20,12 @@ The CLA applies to every part of this repository, including the shared engine pa
   recordings, protocol codes, vendor files) and posts the result here. It runs on a schedule, so a new push gets its
   status within about 15 minutes, and sometimes later. On a pull request from a fork it stays pending until a
   maintainer has approved its current commit, so it can't be used to test guesses at private content. A failure says
-  only that something matched, never what; a maintainer will tell you what to change.
+  only that something matched, never what; a maintainer will tell you what to change. It also looks for Patchsprite's
+  private plans: this repository has no milestones and no labels starting `stage`, and its files, commit and tag
+  messages, labels, and issue and pull request titles and bodies may cite a private requirement id (such as `F39`) but
+  never describe it. Our own ids, `S1` and up, are listed in `docs/requirements.md`.
 - **CLA**: CLA Assistant, as above.
 
-Pull request titles, descriptions, comments and issues are public but not scanned, so don't paste captures, SysEx
-dumps or vendor files into them. Use the sniffer's upload to share a capture with us.
+Issue and pull request text is public, and only titles and bodies are checked, for the plans above; comments are not
+read at all. Don't paste captures, SysEx dumps or vendor files into any of it. Use the sniffer's upload to share a
+capture with us.
