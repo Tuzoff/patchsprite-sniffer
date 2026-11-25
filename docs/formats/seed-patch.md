@@ -83,8 +83,8 @@ map-check record about the same entry use the same name.
 | `<message>` | a message | `/messages/<message>`, `/firmwares/<fw>/messages/<message>` |
 | `<message>/<block>` | a message on one block; marks only | (none: edits go to the message) |
 | `<message>@<mode>`, `<message>@<mode>/<block>` | a message as a mode that stands in layouts or enums reads it; marks only | (none: edits go to the message, or to the mode's own entries) |
-| `param/<block>/<id>` | a block parameter by id, in a group that stands in for none | `/parameters/groups/*/params/*` |
-| `param/<block>/<id>/<group>` | a block parameter in a group that stands in for another in some mode (`modes.use.<mode>.groups`) | `/parameters/groups/<group>/params/*` |
+| `param/<owner>/<id>` | a parameter by id, in the table of its owner: a block (a group's `blocks`), or on a slot pedal an effect type (a group's `types`), in a group that stands in for none | `/parameters/groups/*/params/*` |
+| `param/<owner>/<id>/<group>` | a parameter in a group that stands in for another in some mode (`modes.use.<mode>.groups`) | `/parameters/groups/<group>/params/*` |
 | `choice/<name>` | a choice | `/choices/<name>` |
 | `layout/<name>` | a shared layout | `/layouts/<name>`, `/firmwares/<fw>/layouts/<name>` |
 | `enum/<name>` | an enum | `/enums/<name>` |
@@ -132,7 +132,7 @@ as the reviewer saw it:
   change the message every mode shares on one mode's evidence. A fix goes to the message itself, or to the mode's
   own entries (`modes`, `layout/<name>`, `enum/<name>`). It is `refused` when the mode stands another message in
   for it, since that mode never reads it;
-- a grouped parameter (`param/<block>/<id>/<group>`) needs a mode whose `groups` stand that group in;
+- a grouped parameter (`param/<owner>/<id>/<group>`) needs a mode whose `groups` stand that group in;
 - a plain entry seen in a mode where another entry stands in for it (`modes.use.<mode>.messages`, `.layouts`,
   `.enums`, `.constants`, or `.groups` for any group that lists the parameter's block) is `refused`, since the
   evidence is about the stand-in. For a parameter this is on the safe side: it is refused even when the id sits only
@@ -273,7 +273,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
   whose payload another change edits;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
-  limit the values written together;
+  limit the values written together. A parameter's `default` isn't on this list: the map checks it at load against
+  those limits, and it only says where a reset lands;
 - what first contact may send and what verifies a write: `safeRead`, `readBack` (neither changes an entry's
   fingerprint, so only review catches them);
 - the framing (`/transport` and `/addresses`), which every message depends on; a `measured/...` change in them is exempt
