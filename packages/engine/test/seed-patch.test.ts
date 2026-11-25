@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { schemaFiles } from "../../../scripts/schemas.ts";
 import { fingerprint } from "../src/canonical-json.ts";
-import { MAX_PATCH_BYTES, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
+import { MAX_PATCH_BYTES, UNKNOWN_FIRMWARE, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
 
 const fixture = (name: string) => readFileSync(new URL(`../../../test/fixtures/seed-patch/${name}`, import.meta.url), "utf8");
 const seed = () => JSON.parse(fixture("acme-fx-1.seed.json"));
@@ -372,6 +372,22 @@ test("a repair may open the unit's own firmware delta", () => {
   // the source goes on the delta, the entry the unit's firmware reads; the base entry keeps what it had
   assert.deepEqual(out.firmwares["1.20"].messages.nameReply, { cmd: "31", dir: "reply", source: { kind: "wire", ref: "capture walk-1 sha256:0000000000000000" } });
   assert.equal(out.messages.nameReply.source, undefined);
+});
+
+test("a unit that reports no firmware: its evidence edits only the base map", () => {
+  const unknown = (...changes: Change[]): SeedPatch => ({ ...withChanges(...changes), unit: { firmware: UNKNOWN_FIRMWARE } });
+  const rep = (path: string): Change => ({ id: "c", entry: "nameReply", action: "repair", source: "wire", ops: [{ op: "replace", path, value: 1, was: fingerprint(12) }], evidence: [capture] });
+  assert.deepEqual(messages(unknown(rep("/messages/nameReply/payload/fields/0/length"))), []);
+  assert.match(messages(unknown(rep("/firmwares/unknown/messages/nameReply")))[0], /firmware is unknown/);
+  assert.match(messages(unknown(rep("/firmwares/1.20/messages/nameReply")))[0], /another firmware's delta/);
+  // marks carry no ops, so they stand for the unknown firmware as they would for a known one
+  assert.deepEqual(messages(unknown({ id: "c", entry: "nameReply", action: "suspect", evidence: [probeSilent] })), []);
+
+  const { map, results } = applySeedPatch(seed(), unknown({ id: "c", entry: "nameReply", action: "repair", source: "wire", ops: [{ op: "add", path: "/messages/nameReply/note", value: "seen" }], evidence: [capture] }));
+  assert.equal(results[0].status, "applied");
+  const out = map as ReturnType<typeof seed>;
+  assert.equal(out.messages.nameReply.note, "seen");
+  assert.equal(out.firmwares?.unknown, undefined);
 });
 
 test("an entry's source comes from the change and its evidence, never from an op", () => {
