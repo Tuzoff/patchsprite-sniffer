@@ -51,7 +51,7 @@ test("the committed JSON Schema is the one the zod schema generates", () => {
 test("entry names: the app's map-check kinds and the ones a patch adds", () => {
   assert.deepEqual(parseEntry("getPreset"), { kind: "message", message: "getPreset" });
   assert.deepEqual(parseEntry("setBypass/amp"), { kind: "message", message: "setBypass", block: "amp" });
-  assert.deepEqual(parseEntry("param/amp/12"), { kind: "param", block: "amp", id: 12 });
+  assert.deepEqual(parseEntry("param/amp/12"), { kind: "param", owner: "amp", id: 12 });
   assert.deepEqual(parseEntry("choice/presetOrder"), { kind: "choice", name: "presetOrder" });
   assert.deepEqual(parseEntry("layout/patch"), { kind: "layout", name: "patch" });
   assert.deepEqual(parseEntry("setting/input_level"), { kind: "setting", id: "input_level" });
@@ -511,7 +511,7 @@ test("a linked parameter set is an entry in its group", () => {
 test("modes: a message as a mode reads it, a stand-in group's parameter, and the mode a change was seen in", () => {
   assert.deepEqual(parseEntry("getPreset@bass"), { kind: "message", message: "getPreset", mode: "bass" });
   assert.deepEqual(parseEntry("setBypass@bass/amp"), { kind: "message", message: "setBypass", block: "amp", mode: "bass" });
-  assert.deepEqual(parseEntry("param/amp/1/bass_amp"), { kind: "param", block: "amp", id: 1, group: "bass_amp" });
+  assert.deepEqual(parseEntry("param/amp/1/bass_amp"), { kind: "param", owner: "amp", id: 1, group: "bass_amp" });
   assert.deepEqual(parseEntry("modes"), { kind: "section", section: "modes" });
   for (const bad of ["getPreset@", "getPreset@a@b", "@bass", "transport@bass", "param@bass", "linked@bass", "messages@bass", "status@bass", "param/amp/1/x/y", "param/amp/1/Bad-group"])
     assert.equal(parseEntry(bad), null, bad);
@@ -570,4 +570,39 @@ test("modes: a message as a mode reads it, a stand-in group's parameter, and the
 
   const modes: Change = { id: "c", entry: "modes", action: "repair", source: "wire", ops: [{ op: "replace", path: "/modes/use/bass/groups/amp", value: "amp", was: fingerprint("bass_amp") }], evidence: [capture] };
   assert.deepEqual(reviewReasons(withChanges(modes), map).map((r) => r.reason), ["changes which entries a mode uses"]);
+});
+
+test("a slot pedal's parameters are keyed by effect type: param/<type>/<id> finds them as it finds a block's", () => {
+  // made-up slot pedal: any slot holds any effect, so its parameter tables go with effect types
+  const slot = () => JSON.parse(fixture("acme-fx-2.seed.json"));
+  const map = slot();
+  const patch = (m: unknown, ...changes: Change[]): SeedPatch => ({ ...example(), map: "acme/fx-2", base: { file: fingerprint(m) }, changes });
+  assert.deepEqual(entryPaths(map, "param/fuzz/1", "1.20"), [["parameters", "groups", "drives", "params", "sustain"]]);
+  assert.deepEqual(entryPaths(map, "param/plate/1", "1.20"), [["parameters", "groups", "reverbs", "params", "decay"]]);
+  assert.deepEqual(entryPaths(map, "param/slot1/1", "1.20"), [], "a slot is not an owner");
+
+  const sustain: Change = { id: "s", entry: "param/fuzz/1", action: "repair", source: "wire", ops: [{ op: "add", path: "/parameters/groups/drives/params/sustain/max", value: 90 }], evidence: [capture] };
+  const probeParam: Evidence = { ...probeOk, request: "getParam", sent: "f0 7d 02 20 01 01 f7", replies: ["f0 7d 02 21 01 01 40 f7"] };
+  const confirmDecay: Change = { id: "d", entry: "param/plate/1", action: "confirm", source: "read-back", evidence: [probeParam] };
+  assert.deepEqual(messages(patch(map, sustain, confirmDecay)), []);
+  const { map: out, results } = applySeedPatch(map, patch(map, sustain, confirmDecay));
+  assert.deepEqual(results.map((r) => r.status), ["applied", "marked"]);
+  const groups = (out as typeof map).parameters.groups;
+  assert.deepEqual(groups.drives.params.sustain.source, { kind: "wire", ref: "capture walk-1 sha256:0000000000000000" });
+  assert.equal(groups.reverbs.params.decay.source.kind, "read-back");
+  // its ops must land on the parameter the entry names, not another type's
+  const stray: Change = { ...sustain, ops: [{ op: "add", path: "/parameters/groups/reverbs/params/decay/max", value: 90 }] };
+  assert.equal(applySeedPatch(map, patch(map, stray)).results[0].status, "refused");
+
+  // a mode that stands in another group for a type: the plain entry is refused in that mode, the grouped one lands
+  const moded = { ...slot(), modes: { use: { bass: { groups: { drives: "drivesBass" } } } } };
+  moded.parameters.groups.drivesBass = { types: ["fuzz"], params: { sustain: { id: 1, kind: "knob" } } };
+  const inBass = { ...sustain, mode: "bass" };
+  assert.match(applySeedPatch(moded, patch(moded, inBass)).results[0].why ?? "", /stands in for group drives/);
+  const grouped: Change = { ...inBass, entry: "param/fuzz/1/drivesBass", ops: [{ op: "add", path: "/parameters/groups/drivesBass/params/sustain/max", value: 90 }] };
+  assert.equal(applySeedPatch(moded, patch(moded, grouped)).results[0].status, "applied");
+
+  // a parameter's default is checked at load against its limits; changing it is no write-limit change
+  const reset: Change = { id: "r", entry: "param/fuzz/1", action: "repair", source: "wire", ops: [{ op: "replace", path: "/parameters/groups/drives/params/sustain/default", value: 40, was: fingerprint(50) }], evidence: [capture] };
+  assert.deepEqual(reviewReasons(patch(map, reset), map), []);
 });

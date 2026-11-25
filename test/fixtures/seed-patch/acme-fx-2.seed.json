@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "status": "draft",
+  "driver": "param-change",
+  "transport": {
+    "framing": "sysex-plain",
+    "frame": { "header": "f0 7d 02", "terminator": "f7" },
+    "inner": { "cmdLength": 1 },
+    "endian": "le",
+    "timing": { "frameGapMs": 0, "replyTimeoutMs": 300, "ackTimeoutMs": 300 }
+  },
+  "messages": {
+    "getParam": {
+      "cmd": "20",
+      "dir": "request",
+      "payload": { "fields": [{ "name": "slot", "type": "u8" }, { "name": "param", "type": "u8" }] },
+      "reply": { "message": "paramReply" }
+    },
+    "paramReply": {
+      "cmd": "21",
+      "dir": "reply",
+      "payload": { "fields": [{ "name": "slot", "type": "u8" }, { "name": "param", "type": "u8" }, { "name": "value", "type": "u8" }] }
+    },
+    "setParam": {
+      "cmd": "22",
+      "dir": "send",
+      "payload": { "fields": [{ "name": "slot", "type": "u8" }, { "name": "param", "type": "u8" }, { "name": "value", "type": "u8" }] }
+    }
+  },
+  "layouts": {},
+  "enums": { "slot": { "slot1": 0, "slot2": 1 }, "type": { "fuzz": 16, "plate": 32 } },
+  "parameters": {
+    "knobMax": 100,
+    "groups": {
+      "drives": { "types": ["fuzz"], "params": { "sustain": { "id": 1, "kind": "knob", "default": 50 }, "tone": { "id": 2, "kind": "knob" } } },
+      "reverbs": { "types": ["plate"], "params": { "decay": { "id": 1, "kind": "knob" } } }
+    }
+  }
+}

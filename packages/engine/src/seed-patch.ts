@@ -69,7 +69,8 @@ export type Entry =
   /** a measured value, by its dotted path (`transport.timing.compareToggle`) */
   | { kind: "measured"; field: string }
   /** with a group (`param/amp/3/bassAmp`), the parameter in a group that stands in for another in some mode */
-  | { kind: "param"; block: string; id: number; group?: string }
+  /** `owner`: the block, or on a slot pedal the effect type, whose table the parameter is in */
+  | { kind: "param"; owner: string; id: number; group?: string }
   /** a set of paired parameters in a parameter group (`linked/<group>/<set>`) */
   | { kind: "linked"; group: string; set: string }
   | { kind: "setting"; id: string }
@@ -78,13 +79,13 @@ export type Entry =
 
 const BLOCK_RE = /^[a-z][A-Za-z0-9_]*$/;
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
-/** A parameter group's key, as `param/<block>/<id>/<group>` and `linked/<group>/<set>` name it. */
+/** A parameter group's key, as `param/<owner>/<id>/<group>` and `linked/<group>/<set>` name it. */
 const isGroup = (s: string) => s.length <= 64 && (KEY_RE.test(s) || NAME_RE.test(s));
 
 /**
  * An entry name, as the app's map checks write it (docs/design/map-checks.md in the app) plus the kinds a patch also
- * needs: `<message>`, `<message>/<block>`, `<message>@<mode>`, `<message>@<mode>/<block>`, `param/<block>/<id>`,
- * `param/<block>/<id>/<group>`, `choice/<name>`, then `layout/<name>`, `enum/<name>`, `constant/<name>`,
+ * needs: `<message>`, `<message>/<block>`, `<message>@<mode>`, `<message>@<mode>/<block>`, `param/<owner>/<id>`,
+ * `param/<owner>/<id>/<group>`, `choice/<name>`, then `layout/<name>`, `enum/<name>`, `constant/<name>`,
  * `control/<name>`, `setting/<id>`, `linked/<group>/<set>`, `measured/<field>` and the section names. Null when it is
  * none of these.
  */
@@ -102,8 +103,8 @@ export function parseEntry(entry: string): Entry | null {
   if (head === "setting") return parts.length === 2 && KEY_RE.test(a) ? { kind: "setting", id: a } : null;
   if (head === "param") {
     if ((parts.length !== 3 && parts.length !== 4) || !BLOCK_RE.test(a) || !/^(0|[1-9]\d{0,4})$/.test(b)) return null;
-    if (parts.length === 3) return { kind: "param", block: a, id: Number(b) };
-    return isGroup(parts[3]) ? { kind: "param", block: a, id: Number(b), group: parts[3] } : null;
+    if (parts.length === 3) return { kind: "param", owner: a, id: Number(b) };
+    return isGroup(parts[3]) ? { kind: "param", owner: a, id: Number(b), group: parts[3] } : null;
   }
   // `<message>@<mode>`, `<message>@<mode>/<block>`
   const [message, mode, ...more] = head.split("@");
@@ -514,6 +515,7 @@ const formatPath = (path: readonly PropertyKey[]) => path.map((k, i) => (typeof 
 const SAFETY_KEYS = new Set(["safety", "blocked", "hazards"]);
 /** Top-level keys whose risks the reasons below know; a change to any other section can't be judged, so it's reviewed. */
 const KNOWN_TOP = new Set<string>([...SECTION_ENTRIES, ...FINE_SECTIONS]);
+/** What may be written. A parameter's `default` isn't here: the map checks it at load against these limits, and it only says where a reset lands. */
 const WRITE_RANGE_KEYS = new Set(["allowed", "writable", "min", "max", "saturate", "readOnly", "linked"]);
 /** Keys that decide what first contact sends to an unknown unit and whether a write counts as verified. */
 const PROBE_KEYS = new Set(["safeRead", "readBack"]);
@@ -828,10 +830,14 @@ function standInGroups(doc: Json): Set<string> {
   return out;
 }
 
+/** A parameter group holds the tables of a block (`blocks`) or, on a slot pedal, of an effect type (`types`). */
+const owns = (grp: Record<string, Json>, owner: string): boolean =>
+  (Array.isArray(grp.blocks) && grp.blocks.includes(owner)) || (Array.isArray(grp.types) && grp.types.includes(owner));
+
 /**
  * Where an entry is in a map for a firmware, as concrete paths: its delta's and the base's homes that exist; for a
  * parameter, every parameter with its id in a group that lists its block (a stand-in group only when
- * the entry names it, as `param/<block>/<id>/<group>`); for a setting, every item with its id.
+ * the entry names it, as `param/<owner>/<id>/<group>`); for a setting, every item with its id.
  */
 export function entryPaths(map: unknown, entry: string, fw: string, standIns?: ReadonlySet<string>): string[][] {
   const e = parseEntry(entry);
@@ -845,7 +851,7 @@ export function entryPaths(map: unknown, entry: string, fw: string, standIns?: R
       for (const [g, grp] of Object.entries(groups)) {
         // a plain entry is in a group that stands in for none; one with a group, in that stand-in group
         if (e.group === undefined ? stand.has(g) : g !== e.group || !stand.has(g)) continue;
-        if (!isObject(grp) || !Array.isArray(grp.blocks) || !grp.blocks.includes(e.block) || !isObject(grp.params)) continue;
+        if (!isObject(grp) || !owns(grp, e.owner) || !isObject(grp.params)) continue;
         for (const [k, x] of Object.entries(grp.params)) if (isObject(x) && x.id === e.id) out.push(["parameters", "groups", g, "params", k]);
       }
     return out;
@@ -934,7 +940,7 @@ function modeIssue(use: Json | undefined, doc: Json, e: Entry | null, mode: stri
   if (isObject(groups))
     for (const [g, grp] of Object.entries(groups)) {
       const s = standsIn(u, "groups", g);
-      if (s !== undefined && isObject(grp) && Array.isArray(grp.blocks) && grp.blocks.includes(e.block)) return `in mode ${mode}, ${s} stands in for group ${g}`;
+      if (s !== undefined && isObject(grp) && owns(grp, e.owner)) return `in mode ${mode}, ${s} stands in for group ${g}`;
     }
   return null;
 }
@@ -973,7 +979,7 @@ function sourceHomesOf(doc: Json, segs: readonly string[]): string[][] {
   return fws.flatMap((fw) => {
     const prefix = fw === undefined ? [] : ["firmwares", fw];
     const own = fw === undefined ? segs : segs.slice(2);
-    // a group's own keys (its blocks, say) are part of every one of its parameters' claim
+    // a group's own keys (its blocks or types, say) are part of every one of its parameters' claim
     if (own.length >= 4 && own[0] === "parameters" && own[1] === "groups" && own[3] !== "params")
       return homesUnder(doc, [...prefix, ...own.slice(0, 3)], ["params", "*"]);
     return SOURCE_HOMES.flatMap((home) => {
