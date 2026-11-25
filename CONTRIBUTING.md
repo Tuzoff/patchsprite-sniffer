@@ -19,7 +19,7 @@ The CLA applies to every part of this repository, including the shared engine pa
 - **`leak-check`**: Patchsprite's closed CI scans this repository for private content (device maps and their
   recordings, protocol codes, vendor files) and posts the result here. It runs on a schedule, so a new push gets its
   status within about 15 minutes, and sometimes later. On a pull request from a fork it stays pending until a
-  maintainer has reviewed the current commit, so it can't be used to test guesses at private content. A failure says
+  maintainer has approved its current commit, so it can't be used to test guesses at private content. A failure says
   only that something matched, never what; a maintainer will tell you what to change.
 - **CLA**: CLA Assistant, as above.
 
