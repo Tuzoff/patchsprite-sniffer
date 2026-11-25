@@ -3,6 +3,9 @@
 The sniffer's requirements, by id. A pull request names the ones it serves on its `Requirements:` line (see the
 pull request template), or says `none (why)` for tooling and housekeeping.
 
+A change to the shared engine package may also name the Patchsprite app's requirement ids it serves (such as
+`F39`). Those are tracked privately, so this repo lists no descriptions for them.
+
 | Id | Requirement |
 | --- | --- |
 | S1 | Capture both directions passively, with timestamps, without opening the device's MIDI port, so the editor keeps it |
