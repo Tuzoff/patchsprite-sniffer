@@ -1,0 +1,162 @@
+// Click, type and the other walk input (S11), in the coordinates of the walk's screenshots (shot.ts), so the model
+// reads a point off the latest shot and passes it as it is. Input lands only on the editor: the host refuses a point
+// on any other window, and keys while another window is in front. A covered point is retried for a while (a chat
+// app's overlay may sit there), then refused. The caller's `beforeInput` runs first: the walk uses it to make sure it
+// holds the pedal lock.
+import type { FoundWindow, InputResult, Rect, WindowHost } from "./host.ts";
+
+export type Step =
+  | { op: "click" | "dclick" | "rclick"; x: number; y: number }
+  | { op: "wheel"; x: number; y: number; notches: number }
+  | { op: "drag" | "slowdrag"; x: number; y: number; x1: number; y1: number }
+  | { op: "key"; combo: string }
+  | { op: "type"; text: string }
+  | { op: "wait"; seconds: number };
+
+/** Key names a step may use; one letter or digit also works on its own. */
+export const KEYS: Readonly<Record<string, number>> = {
+  enter: 0x0d, esc: 0x1b, tab: 0x09, backspace: 0x08, delete: 0x2e, space: 0x20,
+  up: 0x26, down: 0x28, left: 0x25, right: 0x27, home: 0x24, end: 0x23, pgup: 0x21, pgdn: 0x22,
+  ctrl: 0x11, shift: 0x10, alt: 0x12,
+  f1: 0x70, f2: 0x71, f3: 0x72, f4: 0x73, f5: 0x74, f6: 0x75, f7: 0x76, f8: 0x77, f9: 0x78, f10: 0x79, f11: 0x7a, f12: 0x7b,
+};
+
+export class InputError extends Error {}
+
+/** The virtual-key codes of a combination such as "ctrl+z". */
+export function keyCodes(combo: string): number[] {
+  const names = combo.toLowerCase().split("+").map((k) => k.trim());
+  return names.map((k) => {
+    if (KEYS[k] !== undefined) return KEYS[k];
+    if (/^[a-z0-9]$/.test(k)) return k.toUpperCase().charCodeAt(0);
+    throw new InputError(`unknown key "${k}"; use one letter or digit, or one of: ${Object.keys(KEYS).join(", ")}`);
+  });
+}
+
+/** One step in the short form the walk prompt uses: click:X,Y dclick:X,Y rclick:X,Y wheel:X,Y,N drag:X,Y,X1,Y1
+ * slowdrag:X,Y,X1,Y1 key:ctrl+z type:TEXT wait:S. */
+export function parseStep(s: string): Step {
+  const i = s.indexOf(":");
+  const op = i < 0 ? s : s.slice(0, i);
+  const arg = i < 0 ? "" : s.slice(i + 1);
+  const nums = (n: number) => {
+    const v = arg.split(",").map((x) => Number(x.trim()));
+    if (v.length !== n || v.some((x) => !Number.isFinite(x))) throw new InputError(`"${s}": ${op} takes ${n} numbers`);
+    return v;
+  };
+  switch (op) {
+    case "click":
+    case "dclick":
+    case "rclick": {
+      const [x, y] = nums(2);
+      return { op, x, y };
+    }
+    case "wheel": {
+      const [x, y, notches] = nums(3);
+      if (!Number.isInteger(notches) || notches === 0 || Math.abs(notches) > 50) throw new InputError(`"${s}": notches is a whole number from -50 to 50, not 0`);
+      return { op, x, y, notches };
+    }
+    case "drag":
+    case "slowdrag": {
+      const [x, y, x1, y1] = nums(4);
+      return { op, x, y, x1, y1 };
+    }
+    case "key":
+      keyCodes(arg);
+      return { op, combo: arg };
+    case "type":
+      if (!arg) throw new InputError(`"${s}": type needs text`);
+      return { op, text: arg };
+    case "wait": {
+      const [seconds] = nums(1);
+      if (seconds < 0 || seconds > 30) throw new InputError(`"${s}": wait is 0 to 30 seconds`);
+      return { op, seconds };
+    }
+    default:
+      throw new InputError(`unknown step "${s}"`);
+  }
+}
+
+export interface InputDeps {
+  host: WindowHost;
+  /** The editor, as the host names it. */
+  app: string;
+  /** Runs before any input; the walk makes sure it holds the pedal lock here, and throws to stop. */
+  beforeInput: () => Promise<void>;
+  /** The screenshots' scale (shot.ts; default 0.5). */
+  scale?: number;
+  /** How long a covered point is retried before the input is refused, in ms (default 30 s). */
+  coveredTimeoutMs?: number;
+  /** Wait between those tries, in ms (default 1 s). */
+  retryMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export async function editorWindow(host: WindowHost, app: string): Promise<FoundWindow> {
+  const win = await host.find(app);
+  if (!win.found) throw new InputError(`no window of ${app}: is the editor running?`);
+  return win;
+}
+
+/** A point on a shot of the window, as screen px; refused if it falls outside the window. */
+export function toScreen(rect: Rect, scale: number, x: number, y: number): { x: number; y: number } {
+  if (x < 0 || y < 0 || x >= rect.width * scale || y >= rect.height * scale) {
+    throw new InputError(`(${x}, ${y}) is outside the editor's window on the shot (${Math.round(rect.width * scale)} × ${Math.round(rect.height * scale)})`);
+  }
+  return { x: Math.round(rect.left + x / scale), y: Math.round(rect.top + y / scale) };
+}
+
+/** Runs the steps in order, after `beforeInput`. Stops at the first refused step and says which. */
+export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
+  const scale = d.scale ?? 0.5;
+  const sleep = d.sleep ?? wait;
+  await d.beforeInput();
+  for (const [n, step] of steps.entries()) {
+    if (step.op === "wait") {
+      await sleep(step.seconds * 1000);
+      continue;
+    }
+    const deadline = Date.now() + (d.coveredTimeoutMs ?? 30_000);
+    for (;;) {
+      // Look the window up again on every try: the editor may have moved or come back to the front.
+      const win = await editorWindow(d.host, d.app);
+      await d.host.front(win.hwnd);
+      const res = await send(d.host, win, scale, step);
+      if (res.done) break;
+      if (Date.now() >= deadline) {
+        throw new InputError(`step ${n + 1} (${step.op}) refused: the point is on another window (${JSON.stringify(res.owner)}), not the editor`);
+      }
+      await sleep(d.retryMs ?? 1000);
+    }
+    await sleep(50);
+  }
+}
+
+function send(host: WindowHost, win: FoundWindow, scale: number, s: Exclude<Step, { op: "wait" }>): Promise<InputResult> {
+  const at = (x: number, y: number) => toScreen(win.rect, scale, x, y);
+  switch (s.op) {
+    case "click":
+    case "dclick":
+    case "rclick": {
+      const p = at(s.x, s.y);
+      return host.click(win.pid, p.x, p.y, s.op === "rclick" ? "right" : "left", s.op === "dclick" ? 2 : 1);
+    }
+    case "wheel": {
+      const p = at(s.x, s.y);
+      return host.wheel(win.pid, p.x, p.y, s.notches);
+    }
+    case "drag":
+    case "slowdrag": {
+      const p = at(s.x, s.y);
+      const q = at(s.x1, s.y1);
+      // a slow drag holds before and after moving: list widgets that need a long press to start dragging
+      return s.op === "drag" ? host.drag(win.pid, p.x, p.y, q.x, q.y, 12, 30) : host.drag(win.pid, p.x, p.y, q.x, q.y, 40, 700);
+    }
+    case "key":
+      return host.keys(win.pid, keyCodes(s.combo));
+    case "type":
+      return host.type(win.pid, s.text);
+  }
+}

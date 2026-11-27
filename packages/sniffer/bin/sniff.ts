@@ -40,6 +40,7 @@ if (cmd === "mcp") {
   const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
   const { createServer } = await import("../src/mcp/server.ts");
   const { Recorder } = await import("../src/recorder.ts");
+  const { registerWalkTools } = await import("../src/walk/tools.ts");
   const recorder = new Recorder({
     getDevice: async () => {
       if (process.platform !== "win32") throw new Error("Capturing needs Windows today: the frida-winmm method hooks the editor's Windows MIDI calls.");
@@ -52,7 +53,7 @@ if (cmd === "mcp") {
   };
   for (const sig of ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"] as const) process.on(sig, stopAll);
   process.stdin.on("close", stopAll);
-  await createServer(recorder).connect(new StdioServerTransport());
+  await createServer(recorder, [registerWalkTools]).connect(new StdioServerTransport());
 } else {
 if (cmd !== "capture") fail(2, USAGE);
 
