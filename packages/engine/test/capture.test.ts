@@ -80,6 +80,13 @@ test("records are checked against the schema, with the line and the field", () =
   assert.match(issues(join([h, JSON.stringify({ type: "other", t: 1 })]))[0], /^2: /);
   // a screenshot is a file name beside the capture, never a path
   assert.match(issues(join([h, JSON.stringify({ type: "stepStart", t: 1, id: 1, kind: "action", label: "x", before: "..\\x.png" })]))[0], /^2: before: /);
+  // the editor is a file name: a path could hold the user's name
+  const header = JSON.parse(h);
+  for (const exe of ["C:\\Users\\someone\\Editor.exe", "/home/someone/editor", "Editor.exe"]) {
+    const got = issues(join([JSON.stringify({ ...header, editor: { exe } })]));
+    assert.deepEqual(got, exe === "Editor.exe" ? [] : ["1: editor.exe: the editor is a file name, not a path"], exe);
+  }
+  assert.match(issues(join([h, JSON.stringify({ type: "stepStart", t: 1, id: 1, kind: "action", label: "x", mode: "Bass Mode" })]))[0], /^2: mode: a mode is its camelCase key/);
 });
 
 test("an overlong line is refused before it is parsed", () => {

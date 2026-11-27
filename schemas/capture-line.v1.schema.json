@@ -134,7 +134,8 @@
             "exe": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 260
+              "maxLength": 128,
+              "pattern": "^[^\\\\/:*?\"<>|\\p{Cc}]+$"
             },
             "version": {
               "type": "string",
@@ -343,6 +344,11 @@
                 "after"
               ],
               "additionalProperties": false
+            },
+            "mode": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][A-Za-z0-9]*$"
             },
             "before": {
               "type": "string",

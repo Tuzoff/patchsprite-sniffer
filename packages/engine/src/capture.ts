@@ -46,8 +46,8 @@ export const CaptureHeaderSchema = z.strictObject({
     })
     .optional(),
   editor: z.strictObject({
-    /** The executable the capture attached to, as the OS names it. */
-    exe: z.string().min(1).max(260),
+    /** The executable's file name the capture attached to ("Editor.exe"): a name only, never a path, which can hold the user's name. */
+    exe: z.string().min(1).max(128).regex(/^[^\\/:*?"<>|\p{Cc}]+$/u, "the editor is a file name, not a path"),
     /** The editor's version as it reports it, when it does. */
     version: z.string().min(1).max(64).optional(),
   }),
@@ -110,6 +110,8 @@ export const StepStartSchema = z.strictObject({
   kind: z.enum(STEP_KINDS),
   label: z.string().min(1).max(MAX_LABEL),
   change: ChangeSchema.optional(),
+  /** The operating mode the unit is in for this step, for a device whose protocol changes with its mode (the map's mode key). */
+  mode: z.string().max(64).regex(/^[a-z][A-Za-z0-9]*$/, "a mode is its camelCase key").optional(),
   /** Screenshot file names beside the capture, never paths. */
   before: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).optional(),
 });

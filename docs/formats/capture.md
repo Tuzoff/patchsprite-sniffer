@@ -47,7 +47,7 @@ message. Times (`t`) are milliseconds since the Unix epoch on the capturing comp
 | `method` | yes | how messages were captured: `frida-winmm` (a Frida hook on the editor's WinMM calls, Windows) |
 | `device.usb` | no | `{vid, pid}` of the device |
 | `device.ports` | no | `{in, out}`: the device's MIDI port names exactly as the OS shows them; the map builder writes the map's bare port name from them |
-| `editor` | yes | `{exe, version?}`: the executable the capture attached to, and its version as the editor reports it |
+| `editor` | yes | `{exe, version?}`: the executable's file name the capture attached to (`AcmeEdit.exe`; never a path, which can hold the user's name), and its version as the editor reports it |
 | `note` | no | free text |
 
 ## Records
@@ -88,6 +88,7 @@ incomplete instead of vanishing. Steps never overlap, and each has a unique `id`
 | `kind` | yes | `action` (one labelled change the editor makes), `idle` (the editor left alone, so what it sends is its poll set), `selfTest` (the session's opening check), or `manual` (a step the user performs by hand while the capture runs, for what automation can't do) |
 | `label` | yes | what the step does, as `control: before → after` once the change is known (`Drive: off → on`) |
 | `change` | no | the same change as `{control, before, after}` |
+| `mode` | no | the operating mode the unit is in for this step, by the map's mode key, for a device whose protocol changes with its mode, so the builder knows which mode's entries a step covers |
 | `before` | no | the before-screenshot's file name beside the capture (a name, never a path) |
 
 `stepEnd`:
@@ -103,3 +104,11 @@ incomplete instead of vanishing. Steps never overlap, and each has a unique `id`
 ### `end`: the session ended
 
 `reason` is `stopped`, `selfTestFailed` or `error`, with an optional `text`.
+
+## What reads a capture
+
+The cloud map builder turns captures into device maps. It counts what the device says about itself as
+device-reported evidence, stronger than the wire alone: the reply to the MIDI universal identity request
+(`f0 7e .. 06 02 ..`, which names the maker, family and firmware) and the lists the device sends when the editor asks
+for them (S17). The capture keeps those replies as plain `midi` records; marking them is the decoder's job, from the
+map.
