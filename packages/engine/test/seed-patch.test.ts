@@ -306,6 +306,23 @@ test("a change that could lift a block goes to review: the pins that tell a bloc
   assert.deepEqual(modedReasons(edit("layout/sceneBass", { op: "replace", path: "/layouts/sceneBass/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
   assert.deepEqual(modedReasons(edit("factoryResetBass", { op: "replace", path: "/messages/factoryResetBass/cmd", value: "7d", was: fingerprint("7e") })), [LIFT]);
 
+  // a pinned message's header, and the layout a packed tail reads with, through a named layout or an inline payload (#42)
+  const packed = structuredClone(base);
+  packed.layouts.record = { fields: [{ name: "kind", type: "u8", const: 2 }, { name: "slot", type: "u8" }] };
+  packed.layouts.recordBass = structuredClone(packed.layouts.record);
+  packed.layouts.scene = { packed: { packing: "7bit", layout: "record" } };
+  packed.layouts.chunk = { fields: [{ name: "at", type: "u8" }] };
+  packed.messages.storeChunk = { cmd: "7f", dir: "send", header: "edit", payload: { packed: { packing: "7bit", pieces: { layout: "chunk" } } } };
+  packed.modes = { use: { bass: { layouts: { record: "recordBass" } } } };
+  const packedReasons = (c: Change) => reviewReasons(withChanges(c), packed).map((r) => r.reason);
+  assert.deepEqual(packedReasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/header", value: "other" })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("storeChunk", { op: "replace", path: "/messages/storeChunk/header", value: "other", was: fingerprint("edit") })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/record", { op: "replace", path: "/layouts/record/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/recordBass", { op: "replace", path: "/layouts/recordBass/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/chunk", { op: "add", path: "/layouts/chunk/fields/1", value: { name: "more", type: "u8" } })), [LIFT]);
+  // a header on a message away from the block's cmd is still no reason
+  assert.deepEqual(packedReasons(edit("nameReply", { op: "add", path: "/messages/nameReply/header", value: "edit" })), []);
+
   // away from the block's cmd, a payload or cmd repair is still not a review reason
   assert.deepEqual(reasons(rename), []);
   assert.deepEqual(reasons(edit("nameReply", { op: "replace", path: "/messages/nameReply/cmd", value: "32", was: fingerprint("31") })), []);

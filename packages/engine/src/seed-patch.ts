@@ -530,8 +530,19 @@ const PROBE_KEYS = new Set(["safeRead", "readBack"]);
 /** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */
 const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb", "lsb", "channel", "bits"]);
 
-/** Keys of a message that decide which bytes it sends: its cmd, its direction and its payload (inline or a layout's name). */
-const PIN_KEYS = ["cmd", "dir", "payload"];
+/**
+ * Keys of a message that decide which bytes it sends: its cmd, its direction, its payload (inline or a layout's name)
+ * and its header (on sysex-plain framing, two messages with one cmd under different headers are different messages).
+ */
+const PIN_KEYS = ["cmd", "dir", "payload", "header"];
+
+/** The shared layouts a layout's (or an inline payload's) packed tail is read with, or joined into as a piece. */
+function tailLayouts(layout: Json | undefined): string[] {
+  const packed = isObject(layout) ? layout.packed : undefined;
+  if (!isObject(packed)) return [];
+  const pieces = packed.pieces;
+  return [packed.layout, isObject(pieces) ? pieces.layout : undefined].filter((l): l is string => typeof l === "string");
+}
 
 /** The app's longest cmd, in bytes (`transport.inner.cmdLength`). A longer one can't load, so it is judged by nothing. */
 const MAX_CMD_TOKENS = 8;
@@ -582,8 +593,9 @@ const SEP = "\u0000";
 /**
  * Where a change may lift a block, as joined paths. A block is per message: the app lets a send share a blocked
  * message's cmd only while their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them
- * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir` and `payload` of every blocked
- * message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, and what a
+ * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir`, `payload` and `header` of every
+ * blocked message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, the
+ * layouts those payloads' packed tails are read with (whose consts pin bytes and whose fields set lengths), and what a
  * mode stands in for any of them. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
  *
  * A reviewer may accept any subset of a patch's changes, so each message counts with every cmd, direction and payload
@@ -591,6 +603,8 @@ const SEP = "\u0000";
  */
 function blockPins(maps: readonly Json[]): Set<string> {
   const seen = new Map<string, Record<string, Json>[]>();
+  // every version of each layout, for the packed tails a named payload reads with
+  const layouts = new Map<string, Json[]>();
   const blocked = new Set<string>();
   // what stands in for a message or layout in some mode; one mapped to itself doesn't
   const stand = { messages: new Map<string, Set<string>>(), layouts: new Map<string, Set<string>>() };
@@ -604,6 +618,13 @@ function blockPins(maps: readonly Json[]): Set<string> {
           const list = seen.get(n);
           if (list) list.push(m);
           else seen.set(n, [m]);
+        }
+    for (const table of [at(map, ["layouts"]), ...deltas.map((d) => at(d, ["layouts"]))])
+      if (isObject(table))
+        for (const [n, l] of Object.entries(table)) {
+          const list = layouts.get(n);
+          if (list) list.push(l);
+          else layouts.set(n, [l]);
         }
     for (const list of [at(map, ["blocked"]), ...deltas.map((d) => at(d, ["blocked"]))])
       if (Array.isArray(list)) for (const b of list) if (typeof b === "string") blocked.add(b);
@@ -630,8 +651,16 @@ function blockPins(maps: readonly Json[]): Set<string> {
   const pin = (n: string) => {
     for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
     // by name, whether or not a view has the layout: adding the layout a pinned payload names is a pin change too
-    for (const m of seen.get(n) ?? [])
-      if (typeof m.payload === "string") for (const l of [m.payload, ...standIns("layouts", m.payload)]) out.add(["layouts", l].join(SEP));
+    const named = (l: string) => {
+      for (const x of [l, ...standIns("layouts", l)]) out.add(["layouts", x].join(SEP));
+    };
+    for (const m of seen.get(n) ?? []) {
+      // the layout a payload names, or the payload itself, and the layouts their packed tails read with
+      const own = typeof m.payload === "string" ? [m.payload, ...standIns("layouts", m.payload)] : [];
+      for (const l of own) named(l);
+      const shapes = typeof m.payload === "string" ? own.flatMap((l) => layouts.get(l) ?? []) : [m.payload];
+      for (const shape of shapes) for (const t of tailLayouts(shape)) named(t);
+    }
   };
   for (const b of blocked) pin(b);
   for (const [n, ms] of seen) {
