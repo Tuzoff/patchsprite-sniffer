@@ -30,7 +30,8 @@ The CLA applies to every part of this repository, including the shared engine pa
 - **CLA**: CLA Assistant, as above.
 - **`spec-review`**: maintainers check the change against the sniffer's spec and the Patchsprite app's scope, and add
   `spec-ok: sniffer` and `spec-ok: scope` once both are OK (or `spec-review: not needed` for CI and tooling
-  changes). It fails until then; a maintainer will tell you if anything needs changing.
+  changes). A `spec-ok` label counts only if it was added after the pull request's last push, so a push after a
+  review asks both reviewers again. It fails until then; a maintainer will tell you if anything needs changing.
 - **`gate-approval`**: a pull request that changes how pull requests are checked or merged (anything under `.github/`
   or `.claude/`, the check scripts in `scripts/`, `CLA.md`, `LICENSE`) needs a maintainer's `gate-approved` label added
   after its last push; every other pull request passes it at once. Only maintainers decide on these changes.

@@ -4,32 +4,78 @@ name: spec-review
 # sniffer's spec and the app's scope each add their label once they are OK with it. A PR
 # that only changes CI, the repo's tooling or the release process takes `spec-review: not needed` instead. Only
 # people with triage rights or more can label, so the labels are the reviewers' word.
+#
+# A spec-ok label counts only if it was added after the pull request's last push: a review covers the code it saw, so a push
+# after it asks both reviewers again (they add their label again once they have looked). A push is dated as in
+# scripts/gate-approval.ts: by the start of this pull request's latest unbroken streak of runs of this workflow on the
+# head (pushing A, then B, then A again dates A from its last push), or a later force-push, reopen, branch restore or
+# change of base branch. A label already on a pull request can't be added again, so a reviewer removes it and adds it.
+# The run's name ties a run to its pull request.
+run-name: "spec-review #${{ github.event.pull_request.number }}"
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+    # edited: a new base branch
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review, edited]
 
-# No secrets and no token: it reads only the event's own labels.
-permissions: {}
+# Read only, so a fork's pull request gets the same check.
+permissions:
+  actions: read # this workflow's runs, which date the push
+  issues: read # the label events
+  pull-requests: read
 
 jobs:
   spec-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
     steps:
-      - name: Both spec reviews said OK
+      - name: Both spec reviews said OK after the last push
         run: |
+          set -euo pipefail
           labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
           has() { grep -qxF "$1" <<<"$labels"; }
+          # a CI or tooling pull request's label stays through its pushes, as no spec review read its code
           if has "spec-review: not needed"; then
             echo "No spec review needed (CI, tooling or release process only)."
             exit 0
           fi
+          # only the fields used, in files: a run is about 14 KB, and one argument may hold at most 128 KB
+          events="$RUNNER_TEMP/events.json"
+          runs="$RUNNER_TEMP/runs.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/timeline?per_page=100" --jq '.[]
+            | select(.event | IN("labeled", "base_ref_changed", "head_ref_force_pushed", "head_ref_restored", "reopened"))
+            | {event, created_at, label: .label.name}' >"$events"
+          gh api --paginate -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/spec-review.yml/runs" \
+            -f event=pull_request -f branch="$HEAD_REF" -f per_page=100 \
+            --jq '.workflow_runs[] | {created_at, head_sha, display_title}' >"$runs"
+          # the start of the latest unbroken streak of this pull request's runs on the head, or a later reset
+          pushed="$(jq -rn --slurpfile runs "$runs" --slurpfile events "$events" \
+            --arg title "spec-review #$PR" --arg head "$HEAD_SHA" --arg now "$(date -u +%FT%TZ)" '
+            ([$runs[] | select(.display_title == $title)] | sort_by(.created_at) | reverse) as $r
+            | (first(range(0; $r | length) | select($r[.].head_sha != $head)) // ($r | length)) as $n
+            | ([if $n > 0 then $r[$n - 1].created_at else $now end] + [$events[] | select(.event != "labeled") | .created_at])
+            | max')"
+          echo "Head $HEAD_SHA pushed at $pushed."
+          # the label's last adding came after the push (timestamps share one format, so they compare as strings)
+          fresh() {
+            jq -se --arg l "$1" --arg pushed "$pushed" \
+              '[.[] | select(.event == "labeled" and .label == $l) | .created_at] | max > $pushed' "$events" >/dev/null
+          }
           missing=""
           for l in "spec-ok: sniffer" "spec-ok: scope"; do
-            has "$l" || missing="${missing:+$missing, }$l"
+            if ! has "$l"; then
+              missing="${missing:+$missing, }$l"
+            elif ! fresh "$l"; then
+              missing="${missing:+$missing, }$l (added before the last push: the reviewer removes it and adds it again after a look)"
+            fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Waiting for spec review: no ${missing} label yet."
+            echo "::error::Waiting for spec review: no current ${missing}."
             exit 1
           fi
-          echo "Both spec reviews said OK."
+          echo "Both spec reviews said OK after the last push."
