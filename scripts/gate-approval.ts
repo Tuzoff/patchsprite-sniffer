@@ -21,10 +21,10 @@ export type ChangedFile = { filename: string; previous_filename?: string; patch?
 export type LabelEvent = { event: string; created_at: string; label?: { name: string }; actor?: { login: string } };
 
 const names = (f: ChangedFile) => [f.filename, f.previous_filename].filter((n): n is string => !!n);
-/** the npm manifests, in any folder: what CI installs and runs */
+/** the npm manifests, in any folder and any case (the Windows job's checkout reads PACKAGE.JSON as package.json) */
 const NPM_FILES = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json", ".npmrc"]);
 const isGate = (name: string) =>
-  GATE_FILES.has(name) || GATE_DIRS.some((d) => name.startsWith(d)) || NPM_FILES.has(name.split("/").at(-1) ?? "");
+  GATE_FILES.has(name) || GATE_DIRS.some((d) => name.startsWith(d)) || NPM_FILES.has(name.split("/").at(-1)!.toLowerCase());
 
 /** the changed files that are part of the gate */
 export function gateFiles(files: ChangedFile[]): ChangedFile[] {
