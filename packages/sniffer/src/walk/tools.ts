@@ -1,6 +1,6 @@
 // The walk tools in the sniffer's MCP server (S11): an editor screenshot, input (click, type, keys, wheel, drag),
 // reading a control through UI Automation, and the editor's file dialogs. They work only while a capture runs: the
-// capture names the editor, holds the pedal lock for the whole session and records what every input makes the
+// capture names the editor, holds the pedal lock while the session works and records what every input makes the
 // editor send. Shots are saved beside the capture, in a folder of its own.
 import { mkdir, readFile } from "node:fs/promises";
 import { z } from "zod";
@@ -44,7 +44,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       }
       return { app, host: current.host, dir: shotsDir(file), files: filesDir(file) };
     };
-    // The capture holds the pedal lock from start to stop; input needs it still running at the moment it is sent.
+    // Input needs the capture still running, and its hold on the device, at the moment it is sent.
     const beforeInput = async () => {
       if (!recorder.active) throw new Error("The capture stopped, so the input was not sent.");
       recorder.use(); // input is the session at work: keeps the device held (throws when someone else has it now)

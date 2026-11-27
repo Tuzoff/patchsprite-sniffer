@@ -1,4 +1,4 @@
-// One capture session with everything around it: the pedal lock (held for the whole session, so the Patchsprite app
+// One capture session with everything around it: the pedal lock (held while the session works, so the Patchsprite app
 // and unattended checks leave the device alone while the editor has it), the capture file, the quiet check and the
 // marked steps. The MCP server and any other front end drive the sniffer through this.
 
@@ -135,11 +135,11 @@ export class Recorder {
 
   /**
    * The session is about to work the device (a step, the walk's next input): keeps its hold in use, or takes it again
-   * if it went idle. Throws, in words, when someone else has the device by then. At most once a minute unless `now`
+   * if it went idle. Throws, in words, when someone else has the device by then. At most once a minute unless `force`
    * (a hold renewed within the minute can't have gone idle).
    */
-  use(now = false): void {
-    const busy = this.need().hold.use(now);
+  use(force = false): void {
+    const busy = this.need().hold.use(force);
     if (busy) throw new Error(busy);
   }
 

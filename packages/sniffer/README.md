@@ -28,7 +28,7 @@ attach it to a public issue.
 ## Walk tools (`src/walk/`)
 
 The tools a model uses to walk the editor (S11), served by `sniff mcp` beside the capture tools. They work only while
-a capture runs: the capture names the editor, holds the pedal lock for the whole session and records what every
+a capture runs: the capture names the editor, holds the pedal lock while the session works and records what every
 input makes the editor send. They run on Windows; tests use a fake window host, so they run anywhere.
 
 - `editor_screenshot` (`shot.ts`, S14): the editor's own window only, never the desktop, because shots go to a model.

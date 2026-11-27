@@ -98,7 +98,8 @@ if (cmd === "mcp") {
     });
   } catch (e) {
     const text = (e as Error).message;
-    fail(text.startsWith("The device is in use") ? 3 : 4, text.startsWith("The device is in use") ? text : `The pedal lock: ${text}`);
+    const busy = text.startsWith("The device is in use");
+    fail(busy ? 3 : 4, busy ? text : `The pedal lock: ${text}`);
   }
   process.on("exit", () => {
     try {

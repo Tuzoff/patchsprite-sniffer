@@ -15,7 +15,7 @@ export class DeviceHold {
   private lock?: PedalLock;
   private readonly env: NodeJS.ProcessEnv;
   private readonly note: (kind: "info" | "warning", text: string) => void;
-  private renewedAt = 0;
+  private renewedAt: number;
   /** The holder that took the device after this hold went idle, until it is had again. */
   private lostTo?: PedalLock;
   private readonly now: () => number;
@@ -36,12 +36,12 @@ export class DeviceHold {
   }
 
   /**
-   * The session is working: renews the hold (at most once a minute unless `now`), or takes it again if it went idle.
+   * The session is working: renews the hold (at most once a minute unless `force`), or takes it again if it went idle.
    * Returns undefined while held, or what to tell the user when someone else has the device. Never throws: a missed
    * renewal only lets the hold go idle sooner.
    */
-  use(now = false): string | undefined {
-    if (!now && this.lock && this.now() - this.renewedAt < RENEW_EVERY_MS) return undefined;
+  use(force = false): string | undefined {
+    if (!force && this.lock && this.now() - this.renewedAt < RENEW_EVERY_MS) return undefined;
     try {
       if (this.lock && touchPedalLock(this.lock, this.env)) {
         this.renewedAt = this.now();
