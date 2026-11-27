@@ -682,6 +682,9 @@ export interface ReviewOptions {
   separations?: (map: unknown) => readonly BlockSeparation[];
 }
 
+/** At most this many changes are weighed alone against their separations; the rest keep the plain reason. */
+const MAX_WEIGHED_ALONE = 64;
+
 /** At most this many separation notes per change; the rest are counted. */
 const MAX_SEPARATION_NOTES = 8;
 
@@ -731,10 +734,11 @@ const shown = (s: string, max = 80): string => {
  * means the patch puts a send beside a blocked message, a changed `by` means a separation moved, a pair that is gone
  * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
  * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
- * since an unnamed pair holds on every firmware that doesn't say otherwise. The base map's separations are asked for
- * once; undefined when either map's separations can't be had.
+ * since an unnamed pair holds on every firmware that doesn't say otherwise. The base map's and the whole patch's
+ * separations are asked for once. Undefined when the base map's, the whole patch's or `map`'s separations can't be
+ * had: a change that is fine alone may still leave nothing between a send and a blocked message beside the rest.
  */
-function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown): (patched: unknown, names: Set<string>) => string[] | undefined {
+function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): (map: unknown, names: Set<string>) => string[] | undefined {
   const key = (s: { firmware?: string; send: string; blocked: string }) => [s.firmware ?? "", s.send, s.blocked].join(SEP);
   const ok = (s: unknown): s is BlockSeparation =>
     isObject(s) && typeof s.send === "string" && typeof s.blocked === "string" && typeof s.by === "string" && (s.firmware === undefined || typeof s.firmware === "string");
@@ -746,12 +750,12 @@ function separationNotes(separations: NonNullable<ReviewOptions["separations"]>,
       return undefined;
     }
   };
-  let was: Map<string, BlockSeparation> | undefined | null = null;
+  const was = table(base);
+  const whole = was && table(patched);
   const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => t.get(key(s)) ?? (s.firmware ? t.get(key({ send: s.send, blocked: s.blocked })) : undefined);
   const on = (s: BlockSeparation) => (s.firmware ? ` on ${shown(s.firmware)}` : "");
-  return (patched, names) => {
-    if (was === null) was = table(base);
-    const now = was && table(patched);
+  return (map, names) => {
+    const now = map === patched ? whole : whole && table(map);
     if (!was || !now) return undefined;
     const notes: string[] = [];
     for (const k of new Set([...was.keys(), ...now.keys()])) {
@@ -806,11 +810,13 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
   const pins = blockPins([base as Json, patched as Json]);
   const above = abovePins(pins);
   // separations load a map, so they're asked for only once a change writes a pin. A change's notes weigh the change
-  // accepted alone, since a reviewer may turn the rest down; one that doesn't apply alone is weighed with the whole patch
+  // accepted alone, since a reviewer may turn the rest down; one that doesn't apply alone is weighed with the whole patch.
+  // Past MAX_WEIGHED_ALONE changes the rest keep the plain reason, so a patch can't make the review load a map per change
   let separated: ReturnType<typeof separationNotes> | undefined;
+  let weighed = 0;
   const notesFor = (c: Change, names: Set<string>) => {
-    if (!opts.separations) return [];
-    separated ??= separationNotes(opts.separations, base);
+    if (!opts.separations || weighed++ >= MAX_WEIGHED_ALONE) return [];
+    separated ??= separationNotes(opts.separations, base, patched);
     const alone = p.changes.length > 1 ? applySeedPatch(base, p, new Set([c.id])) : undefined;
     return separated(alone?.results.find((r) => r.change === c.id)?.status === "applied" ? alone.map : patched, names) ?? [];
   };

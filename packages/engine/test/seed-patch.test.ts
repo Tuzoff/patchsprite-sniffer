@@ -716,4 +716,21 @@ test("with block separations from the caller, a change that may lift a block nam
     { change: "a", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
     { change: "b", reason: "may lift a block: what keeps storeScene apart from the blocked factoryReset moves from byte 0: 02 vs 01 to byte 0: 02 vs 05" },
   ]);
+  // and each fine alone but nothing between them together: the whole patch doesn't load, so both keep the plain reason
+  const clash = withChanges(
+    { ...edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 5, was: fingerprint(2) }), id: "a" },
+    { ...edit("factoryReset", { op: "replace", path: "/messages/factoryReset/payload/fields/0/const", value: 5, was: fingerprint(1) }), id: "b" },
+  );
+  assert.deepEqual(reviewReasons(clash, base, { separations: strict }), [
+    { change: "a", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+    { change: "b", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+  ]);
+  // a patch can't make the review load a map per change: past 64 such changes the rest keep the plain reason
+  const lots = withChanges(
+    ...Array.from({ length: 70 }, (_, i) => ({ ...edit("factoryReset", { op: "add", path: `/messages/factoryReset/payload/x${i}`, value: 1 }), id: `c${i}` })),
+  );
+  calls = 0;
+  const plain = reviewReasons(lots, base, { separations: (m) => (calls++, separations(m)) }).filter((r) => r.reason === "may lift a block: changes what tells a blocked message from a send on its cmd");
+  assert.deepEqual(plain.map((r) => r.change), ["c64", "c65", "c66", "c67", "c68", "c69"]);
+  assert.equal(calls, 66);
 });
