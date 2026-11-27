@@ -132,9 +132,8 @@ reads it (map-checks.md, "Fingerprints"); it is not merged into the base one.
 
 ## Modes
 
-A map with `modes` keeps some entries apart per mode (closed-repo map checks, draft PR 93). A change says which mode
-the unit was in when its evidence was seen (`mode`), and when a patch is applied that mode is checked against the map
-as the reviewer saw it:
+A map with `modes` keeps some entries apart per mode. A change says which mode the unit was in when its evidence was
+seen (`mode`), and when a patch is applied that mode is checked against the map as the reviewer saw it:
 
 - an `@<mode>` entry needs a change seen in that mode, and a mode the map uses; it only marks, because an edit would
   change the message every mode shares on one mode's evidence. A fix goes to the message itself, or to the mode's
@@ -279,7 +278,15 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
   counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
   a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
-  whose payload another change edits;
+  whose payload another change edits. A caller may pass an optional function that gives a map's block separations
+  (`reviewReasons(patch, map, { separations })`, each a send, the blocked message it shares a cmd with and what keeps
+  them apart). The reason then names each pair the change touches and how its separation changes from the base map
+  to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now
+  shares a blocked cmd ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that
+  still holds. Without them, when the base map, that map or the whole patch's map doesn't load, or past the first 64
+  changes that may lift a block, the reason is the plain one. Other subsets of three or more changes aren't weighed,
+  so a note is a guide for the reviewer, never a sign that the pair stays apart: the prefix still asks for review, and
+  the map checks run again when the accepted map loads;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together. A parameter's `default` isn't on this list: the map checks it at load against
   those limits, and it only says where a reset lands;
