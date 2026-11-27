@@ -12,7 +12,8 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
 test("the window host finds, fronts and shoots a real window at half size", async (t) => {
   const notepad = spawn("notepad.exe", [], { stdio: "ignore" });
-  const host = new PowerShellHost();
+  const dir = await mkdtemp(join(tmpdir(), "walk-host-"));
+  const host = new PowerShellHost(dir);
   t.after(() => {
     host.close();
     notepad.kill();
@@ -23,15 +24,16 @@ test("the window host finds, fronts and shoots a real window at half size", asyn
     win = await host.find("notepad.exe");
   }
   assert.ok(win.found, "notepad's window appears");
-  const dir = await mkdtemp(join(tmpdir(), "walk-host-"));
   const shot = await takeEditorShot(host, { app: "notepad.exe", dir, name: "notepad" });
   assert.deepEqual((await readFile(shot.path)).subarray(0, 4), PNG);
   assert.ok(Math.abs(shot.width - shot.window.width / 2) <= 1, `half width: ${shot.width} of ${shot.window.width}`);
+  await assert.rejects(host.shot(win.hwnd, join(dir, "..", "outside.png"), 0.5, 16), /session folder/);
+  await assert.rejects(host.shot(win.hwnd, join(dir, "x.txt"), 0.5, 16), /session folder/);
   t.diagnostic(`tries ${shot.tries}, window ${shot.window.width}x${shot.window.height}`);
 });
 
 test("the window host says when no window of an executable is open", async (t) => {
-  const host = new PowerShellHost();
+  const host = new PowerShellHost(tmpdir());
   t.after(() => host.close());
   assert.deepEqual(await host.find("no-such-editor-here.exe"), { found: false });
 });

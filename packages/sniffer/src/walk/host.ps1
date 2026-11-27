@@ -6,7 +6,10 @@
 # nothing that overlaps it can show. When PrintWindow gives a blank frame (a GPU-drawn surface), the fallback copies
 # the window's rectangle from the screen only while every sampled point of it belongs to the editor; otherwise the
 # shot is refused.
+# -ShotRoot is the session's folder for screenshots: a shot is saved only to a .png file under it.
+param([Parameter(Mandatory = $true)][string]$ShotRoot)
 $ErrorActionPreference = 'Stop'
+$ShotRoot = [IO.Path]::GetFullPath($ShotRoot).TrimEnd('\') + '\'
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
@@ -152,6 +155,10 @@ function Invoke-Op($req) {
     }
     'front' { return @{ front = [WalkWin]::Front([IntPtr][int64]$req.hwnd) } }
     'shot' {
+      $path = [IO.Path]::GetFullPath([string]$req.path)
+      if (-not $path.StartsWith($ShotRoot, [StringComparison]::OrdinalIgnoreCase) -or -not $path.EndsWith('.png')) {
+        throw 'a shot is saved only as a .png file in the session folder'
+      }
       $h = [IntPtr][int64]$req.hwnd
       $r = Get-Rect $h
       $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
@@ -168,9 +175,9 @@ function Invoke-Op($req) {
       }
       if (-not $b) { return @{ saved = $false; spread = $spread; rect = (Rect-Json $r) } }
       try {
-        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($req.path)) | Out-Null
+        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) | Out-Null
         $width = [Math]::Max(1, [int][Math]::Round($w * $req.scale))
-        [WalkWin]::SaveScaled($b, $req.path, $width)
+        [WalkWin]::SaveScaled($b, $path, $width)
       } finally { $b.Dispose() }
       return @{ saved = $true; spread = $spread; source = $source; rect = (Rect-Json $r); width = $width }
     }

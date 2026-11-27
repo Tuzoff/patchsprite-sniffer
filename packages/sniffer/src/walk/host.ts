@@ -2,6 +2,7 @@
 // npm module is needed, and tests swap in a fake host.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface Rect {
@@ -50,9 +51,11 @@ export class PowerShellHost implements WindowHost {
   #stderr = "";
   #dead = "";
 
-  constructor(exe = "powershell.exe") {
+  /** `shotRoot`: the session's screenshot folder; the host saves shots only as .png files under it. */
+  constructor(shotRoot: string, exe = "powershell.exe") {
     const script = fileURLToPath(new URL("./host.ps1", import.meta.url));
-    this.#child = spawn(exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
+    const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-ShotRoot", resolve(shotRoot)];
+    this.#child = spawn(exe, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

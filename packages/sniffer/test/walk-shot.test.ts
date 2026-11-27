@@ -88,6 +88,7 @@ test("shot names are safe file names", () => {
   assert.equal(shotFileName("../../etc/passwd"), "etc-passwd.png");
   assert.throws(() => shotFileName("→ ←"), ShotError);
   assert.equal(shotFileName("a".repeat(100)).length, 64);
+  assert.equal(shotFileName("..\\..\\Windows\\x"), "windows-x.png");
 });
 
 test("a point on a half-size shot maps back to the screen", () => {
