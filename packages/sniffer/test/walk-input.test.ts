@@ -164,11 +164,11 @@ test("enter is refused when the dialog in front would press a hazard default but
   assert.throws(() => parseStep("type:a\bb"), /one line of text/);
 });
 
-test("while a file dialog is open, input may only scroll or press Cancel; Alt shortcuts are refused beside a hazard button", async () => {
+test("while a file dialog is open, input may only scroll, press Esc or click Cancel; Alt shortcuts are refused beside a hazard button", async () => {
   const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
   const button = (name: string) => async () => ({ found: true as const, element: { name, controlType: "Button", automationId: "", className: "", enabled: true, rect: RECT } });
   const fileDialog = async () => ({ dialogs: [{ title: "Open", fileBox: true, buttons: ["&Open", "Cancel"] }] });
-  for (const step of ["type:C:\\x.syx", "key:enter", "key:alt+o", "dclick:1,1", "drag:1,1,2,2"]) {
+  for (const step of ["type:C:\\x.syx", "key:enter", "key:alt+o", "key:tab", "dclick:1,1", "rclick:1,1", "drag:1,1,2,2"]) {
     const { host, log } = inputHost(0, { dialogs: fileDialog, element: button("Open") });
     await assert.rejects(run(host, [step], true), /a file dialog is open/, step);
     assert.equal(log.filter((l) => !l.startsWith("front")).length, 0, step);
@@ -176,8 +176,9 @@ test("while a file dialog is open, input may only scroll or press Cancel; Alt sh
   const open = inputHost(0, { dialogs: fileDialog, element: button("Open") });
   await assert.rejects(run(open.host, ["click:1,1"]), /a file dialog is open/);
   const cancel = inputHost(0, { dialogs: fileDialog, element: button("&Cancel") });
-  await run(cancel.host, ["click:1,1", "wheel:1,1,-2"]);
-  assert.equal(cancel.log.filter((l) => !l.startsWith("front")).length, 2, "Cancel and scrolling still work");
+  await run(cancel.host, ["click:1,1", "wheel:1,1,-2", "key:esc"]);
+  assert.equal(cancel.log.filter((l) => !l.startsWith("front")).length, 3, "Cancel, Esc and scrolling still work");
+  await assert.rejects(run(cancel.host, ["key:shift+esc"]), /a file dialog is open/);
 
   const store = async () => ({ dialogs: [{ title: "Preset", fileBox: false, buttons: ["Store", "Cancel"] }] });
   const s1 = inputHost(0, { dialogs: store });

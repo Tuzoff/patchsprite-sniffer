@@ -173,23 +173,25 @@ function refuseIfHazardName(name: string, what: string) {
 const CLOSE_BUTTON = /^(cancel|close|no)$/i;
 
 /** While one of the editor's standard file dialogs is open, its file name and its Open or Save button are fill_dialog's
- * alone, which keeps a file inside the capture's folder and checks its extension: input may only scroll or press
- * Cancel. And an Alt shortcut presses a dialog's button unseen, so it is refused while any of the editor's dialogs
+ * alone, which keeps a file inside the capture's folder and checks its extension: input may only scroll, press Esc
+ * or click Cancel. And an Alt shortcut presses a dialog's button unseen, so it is refused while any of the editor's dialogs
  * shows a hazard button. */
 async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number, step: Exclude<Step, { op: "wait" }>, n: number) {
-  const alt = step.op === "key" && keyCodes(step.combo).includes(KEYS.alt);
   if (step.op === "wheel") return;
   const { dialogs } = await d.host.dialogs(win.pid);
   if (!dialogs.length) return;
+  const codes = step.op === "key" ? keyCodes(step.combo) : [];
   if (dialogs.some((x) => x.fileBox)) {
+    // Esc alone only cancels.
+    if (codes.length === 1 && codes[0] === KEYS.esc) return;
     if (step.op === "click") {
       const p = toScreen(win.rect, scale, step.x, step.y);
       const at = await d.host.element(win.pid, p.x, p.y);
       if (at.found && at.element.controlType === "Button" && CLOSE_BUTTON.test(at.element.name.replace(/&/g, "").trim())) return;
     }
-    throw new InputError(`step ${n + 1} (${step.op}) refused: a file dialog is open. Use fill_dialog for its file name and its Open or Save button; editor_input may only scroll or click Cancel there`);
+    throw new InputError(`step ${n + 1} (${step.op}) refused: a file dialog is open. Use fill_dialog for its file name and its Open or Save button; editor_input may only scroll, press Esc or click Cancel there`);
   }
-  if (alt && !d.hazardApproved) {
+  if (step.op === "key" && codes.includes(KEYS.alt) && !d.hazardApproved) {
     const hazard = dialogs.flatMap((x) => x.buttons).find((b) => HAZARD.test(b));
     if (hazard) {
       throw new InputError(`step ${n + 1} (key:${step.combo}) refused: an Alt shortcut can press the dialog's "${hazard}" button, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
