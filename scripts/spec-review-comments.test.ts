@@ -21,7 +21,7 @@ for (const l of lines) {
 const SCRIPT = out.join("\n");
 
 // `runs` is what each listing of the head's spec-review runs answers in turn (the last one repeats): "<id> <status>".
-function run(body: string, runs = ["900 completed"]) {
+function run(body: string, runs = ["900 completed"], role = "write") {
   const dir = mkdtempSync(join(tmpdir(), "spec-review-"));
   try {
     const gh = join(dir, "gh");
@@ -32,6 +32,7 @@ function run(body: string, runs = ["900 completed"]) {
 echo "$*" >> "${join(dir, "calls")}"
 case "$*" in
   *"pulls/7 --jq .head.sha"*) echo ${"e".repeat(40)} ;;
+  *"collaborators/"*"/permission"*) echo "\$ROLE" ;;
   *"spec-review.yml/runs"*)
     n=$(grep -c "spec-review.yml/runs" "${join(dir, "calls")}")
     sed -n "\${n}p" "${join(dir, "runs")}" | grep . || tail -n 1 "${join(dir, "runs")}" ;;
@@ -47,6 +48,8 @@ esac
         GITHUB_REPOSITORY: "acme/sniffer",
         PR: "7",
         BODY: body,
+        AUTHOR: "rev",
+        ROLE: role,
         SPEC_REVIEW_PAUSE: "0",
       },
     });
@@ -89,9 +92,18 @@ test("a spec-review run still going is waited for, never passed over for an olde
   assert.match(none.out, /No finished spec-review run/);
 });
 
-test("only comments by people with write access count, and the check reads the labels as they are now", () => {
+test("a commenter who can't label the PR (read-only or no access) changes nothing", () => {
+  for (const role of ["read", "none", ""]) {
+    const r = run("Spec review: OK (scope)", ["900 completed"], role);
+    assert.equal(r.status, 0, r.out);
+    assert.deepEqual(r.calls, ["api repos/acme/sniffer/collaborators/rev/permission --jq .role_name"], role);
+  }
+});
+
+test("only comments by people who can label count, and the check reads the labels as they are now", () => {
   assert.match(YML, /contains\(fromJSON\('\["OWNER","MEMBER","COLLABORATOR"\]'\), github\.event\.comment\.author_association\)/);
   const check = readFileSync(fileURLToPath(new URL("../.github/workflows/spec-review.yml", import.meta.url)), "utf8");
   assert.match(check, /permissions:\n  pull-requests: read\n/);
-  assert.match(check, /labels="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/pulls\/\$PR" --jq '\.labels\[\]\.name'/);
+  assert.match(check, /labels="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/pulls\/\$PR" --jq '\.labels\[\]\.name'\)" \|\| labels=""\n/);
+  assert.doesNotMatch(check, /GITHUB_EVENT_PATH/, "never the event's labels, which a re-run keeps");
 });

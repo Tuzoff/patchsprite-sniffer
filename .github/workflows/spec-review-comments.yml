@@ -10,7 +10,7 @@ name: spec-review-comments
 # re-run on the pull request's newest spec-review run.
 #
 # It reads only the comment and the pull request's number, and runs no code from any branch. Only comments by the
-# owner, organization members and collaborators count: in this public repo anyone can comment. No secrets: this
+# people who could label the pull request themselves (triage or higher) count: in this public repo anyone can comment. No secrets: this
 # repo's CI never gets any.
 on:
   issue_comment:
@@ -38,6 +38,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.issue.number }}
       BODY: ${{ github.event.comment.body }}
+      AUTHOR: ${{ github.event.comment.user.login }}
     steps:
       - name: Add or take off the spec-ok label, and re-run the spec-review check
         run: |
@@ -49,6 +50,15 @@ jobs:
             line="${line%$'\r'}"
             if [[ "$line" =~ ^[[:space:]]*Spec\ review:\ (OK|withdrawn)\ \((sniffer|scope)\)[[:space:]]*$ ]]; then
               label="spec-ok: ${BASH_REMATCH[2]}"
+              if [ -z "${role+x}" ]; then
+                # author_association counts read-only collaborators and any org member: only those who could label the PR
+                # themselves (triage or higher on this repo) count
+                role="$(gh api "repos/$repo/collaborators/$AUTHOR/permission" --jq .role_name 2>/dev/null)" || role=""
+                case "$role" in
+                  admin | maintain | write | triage) ;;
+                  *) echo "$AUTHOR can't label pull requests here (role: ${role:-unknown}); nothing to do."; exit 0 ;;
+                esac
+              fi
               if [ "${BASH_REMATCH[1]}" = OK ]; then
                 gh api -X POST "repos/$repo/issues/$PR/labels" -f "labels[]=$label" --silent
                 echo "Added \"$label\"."

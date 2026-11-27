@@ -23,9 +23,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          # the labels now; the event's own if they can't be read
-          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.labels[].name' 2>/dev/null)" ||
-            labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
+          # the labels now; none if they can't be read (a re-run's event may still hold a label since taken off)
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.labels[].name')" || labels=""
           has() { grep -qxF "$1" <<<"$labels"; }
           if has "spec-review: not needed"; then
             echo "No spec review needed (CI, tooling or release process only)."
