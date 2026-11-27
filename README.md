@@ -11,6 +11,12 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 - [Capture](docs/formats/capture.md): what the sniffer records in one session, as JSON Lines: every MIDI message both ways with its time, and the marked steps.
 - [Seed patch](docs/formats/seed-patch.md) (proposal): changes a unit's evidence makes to a seed device map, one change per entry, each with its evidence.
 
+## Skills
+
+- [map-a-device](skills/map-a-device/SKILL.md): walking a device's vendor editor with the sniffer's tools, one control
+  at a time, with the consent, walk plan and guardrails. Drop the folder into a client that loads skills (such as
+  Claude Code); the sniffer's MCP server serves the same text as `help("walk")`.
+
 Run the tests with `npm ci && npm test` (Node 22.18 or newer).
 
 This repo holds no secrets, and none may ever be added: no Actions secrets, no keys or tokens in files, and no device mappings or captures. Checks that need private data (such as the leak check) run from Patchsprite's closed CI, not here.

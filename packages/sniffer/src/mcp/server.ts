@@ -18,7 +18,14 @@ Rules:
 - A capture can hold the user's presets. It stays on their computer: never paste capture bytes into a public place.
 - If the self-test fails, stop and tell the user what it said.
 
-Call help("session") for the order of a session, and help("steps") for step labels.`;
+Call help("session") for the order of a session, help("steps") for step labels, and help("walk") for walking the editor with the walk tools (the "map a device" skill).`;
+
+/** The "map a device" skill (skills/map-a-device/SKILL.md at the repo root), without its frontmatter: one text for
+ * clients that load skills and for help("walk"). */
+export function walkGuide(): string {
+  const md = readFileSync(new URL("../../../../skills/map-a-device/SKILL.md", import.meta.url), "utf8");
+  return md.replace(/^---\n[\s\S]*?\n---\n+/, "").trim();
+}
 
 const HELP: Record<string, string> = {
   session: `A capture session:
@@ -61,7 +68,7 @@ export function createServer(recorder: Recorder, extra: RegisterTools[] = []): M
   const server = new McpServer({ name: "patchsprite-sniffer", version: "0.0.0" }, { instructions: INSTRUCTIONS });
   let lastFile: string | undefined;
 
-  server.registerTool("help", { description: "More on a topic: session (the order of a capture session) or steps (labels and the quiet check).", inputSchema: { topic: z.enum(["session", "steps"]) }, annotations: ro }, async ({ topic }) => text(HELP[topic]));
+  server.registerTool("help", { description: "More on a topic: session (the order of a capture session), steps (labels and the quiet check) or walk (walking the editor with the walk tools: consent, the walk plan, guardrails).", inputSchema: { topic: z.enum(["session", "steps", "walk"]) }, annotations: ro }, async ({ topic }) => text(topic === "walk" ? walkGuide() : HELP[topic]));
 
   server.registerTool(
     "start_capture",
