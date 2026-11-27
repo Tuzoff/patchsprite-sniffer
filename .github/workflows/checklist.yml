@@ -1,10 +1,14 @@
 name: checklist
 
 # The pull request body's review boxes and Requirements line (scripts/pr-checklist.ts), as the Patchsprite app's
-# checklist does. It runs the base branch's script, never the pull request's, so a pull request can't loosen the check
-# it is judged by; and it reads the body from the event, so an edit (ticking a box) re-runs it.
+# checklist does. Main's copy decides: pull_request_target runs this file as it is on the base branch, and it checks
+# out only the base branch's script and requirements, never the pull request's code, so a pull request can't loosen
+# the check it is judged by (under pull_request, its own edit to this file would run). That also makes it safe for
+# forks: nothing from the pull request runs, the token is read-only and there are no secrets. The body comes from the
+# event through env, never into the script's text, and an edit (ticking a box) re-runs it. The pull request that
+# added this file gets no run, since its base had none.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
 # No secrets: this public repo's CI never gets any, and none may ever be added (see README).
