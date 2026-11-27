@@ -43,6 +43,7 @@ export class Recorder {
     running: Promise<void>;
     counts: Counts;
     file: string;
+    editor: string;
   };
 
   constructor(o: RecorderOptions) {
@@ -55,6 +56,11 @@ export class Recorder {
 
   get file(): string | undefined {
     return this.live?.file;
+  }
+
+  /** The running capture's editor executable, for tools that find its window. */
+  get editor(): string | undefined {
+    return this.live?.editor;
   }
 
   get counts(): Counts | undefined {
@@ -88,7 +94,7 @@ export class Recorder {
       const stop = new AbortController();
       const session = new CaptureSession({ device, editorExe: o.editorExe, attachDelayMs: o.attachDelayS * 1000, write: steps.record });
       const running = session.run(stop.signal);
-      this.live = { writer, steps, lock: got.lock, stop, running, counts, file };
+      this.live = { writer, steps, lock: got.lock, stop, running, counts, file, editor: o.editorExe };
       return file;
     } catch (e) {
       releasePedalLock(got.lock, env);

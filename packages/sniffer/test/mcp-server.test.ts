@@ -49,13 +49,14 @@ test("the instructions fit Claude Code's cut, and every tool carries all four an
 });
 
 test("a whole session: start, idle, self-test, a step, stop; the capture reads back and the lock is given back", async () => {
-  const { env, device, call } = await rig();
+  const { env, device, recorder, call } = await rig();
   device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
   const started = await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0 });
   assert.equal(started.error, false, started.text);
   const file = started.data!.file as string;
   assert.ok(file.startsWith(join(env.PATCHSPRITE_HOME, "sniffer", "captures")));
   assert.ok(existsSync(pedalLockPath(env)), "the device is held for the whole session");
+  assert.equal(recorder.editor, "AcmeEdit.exe");
   const s = await device.nextSession().catch(() => device.sessions[0]);
   await until(() => s.scripts[0]?.loaded === true);
   await until(() => readFileSync(file, "utf8").includes('"attached"'));
@@ -80,6 +81,7 @@ test("a whole session: start, idle, self-test, a step, stop; the capture reads b
   assert.equal(ended.data!.counted, 1, ended.text);
 
   assert.match((await call("stop_capture")).text, /^Stopped\. Saved /);
+  assert.equal(recorder.editor, undefined);
   assert.equal(existsSync(pedalLockPath(env)), false, "the lock is given back");
   assert.equal(s.detachedByUs, true);
   const r = parseCapture(readFileSync(file, "utf8"));
