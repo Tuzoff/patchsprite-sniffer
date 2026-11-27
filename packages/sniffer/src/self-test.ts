@@ -4,7 +4,7 @@
 // don't count; the editor's polls and their answers do, since they show the hook sees both directions.
 
 import type { MidiRecord } from "@patchsprite/engine/capture";
-import type { Change, Steps } from "./steps.ts";
+import { type Change, formatLabel, type Steps } from "./steps.ts";
 
 export interface SelfTestResult {
   ok: boolean;
@@ -32,7 +32,7 @@ export function judgeSelfTest(messages: readonly MidiRecord[]): SelfTestResult {
  * `selfTestFailed`).
  */
 export async function runSelfTest(steps: Steps, change: Change, act: () => Promise<void>): Promise<SelfTestResult> {
-  steps.begin("selfTest", `${change.control}: ${change.before} → ${change.after}`, { change });
+  steps.begin("selfTest", formatLabel(change), { change });
   try {
     await act();
   } catch (e) {
