@@ -1,0 +1,932 @@
+{
+ "schema": 1,
+ "driver": "param-change",
+ "transport": {
+  "framing": "sysex-xor",
+  "frame": {
+   "header": "f0 7d 41 43 06",
+   "terminator": "f7",
+   "checksum": {
+    "algo": "xor",
+    "mask": 127,
+    "verify": true
+   }
+  },
+  "inner": {
+   "cmdLength": 1
+  },
+  "endian": "le",
+  "timing": {
+   "frameGapMs": 0,
+   "replyTimeoutMs": 400,
+   "ackTimeoutMs": 400
+  }
+ },
+ "messages": {
+  "firmwareVersion": {
+   "cmd": "41",
+   "dir": "request",
+   "reply": {
+    "message": "firmwareVersionReply"
+   }
+  },
+  "firmwareVersionReply": {
+   "cmd": "41",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "major",
+      "type": "u8"
+     },
+     {
+      "name": "minor",
+      "type": "u8"
+     },
+     {
+      "name": "unknown",
+      "type": "pad",
+      "length": 5
+     }
+    ]
+   }
+  },
+  "getPreset": {
+   "cmd": "42",
+   "dir": "request",
+   "reply": {
+    "message": "presetNumber"
+   },
+   "source": {
+    "kind": "doc",
+    "ref": "made up: owner's manual p. 1"
+   }
+  },
+  "presetNumber": {
+   "cmd": "42",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "preset",
+      "type": "u16",
+      "septets": 2,
+      "choice": "presetOrder",
+      "min": 0,
+      "max": 23
+     }
+    ]
+   }
+  },
+  "getPresetName": {
+   "cmd": "43",
+   "dir": "request",
+   "reply": {
+    "message": "presetName"
+   }
+  },
+  "presetName": {
+   "cmd": "43",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "name",
+      "type": "string",
+      "length": 32,
+      "open": true
+     }
+    ]
+   }
+  },
+  "setPreset": {
+   "cmd": "44",
+   "dir": "send",
+   "payload": {
+    "fields": [
+     {
+      "name": "preset",
+      "type": "u16",
+      "septets": 2,
+      "choice": "presetOrder",
+      "min": 0,
+      "max": 23
+     }
+    ]
+   }
+  },
+  "result": {
+   "cmd": "45",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "of",
+      "type": "u8"
+     },
+     {
+      "name": "code",
+      "type": "u8"
+     }
+    ]
+   },
+   "note": "made up: answers a send"
+  },
+  "getScene": {
+   "cmd": "46",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "scene",
+      "type": "u8",
+      "const": 127
+     }
+    ]
+   },
+   "reply": {
+    "message": "sceneReply"
+   }
+  },
+  "setScene": {
+   "cmd": "46",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "scene",
+      "type": "u8",
+      "min": 0,
+      "max": 7
+     }
+    ]
+   },
+   "reply": {
+    "message": "sceneReply",
+    "echo": [
+     {
+      "reply": "scene",
+      "request": "scene"
+     }
+    ]
+   }
+  },
+  "sceneReply": {
+   "cmd": "46",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "scene",
+      "type": "u8"
+     }
+    ]
+   }
+  },
+  "blockStatus": {
+   "cmd": "47",
+   "dir": "request",
+   "reply": {
+    "message": "blockStatusList"
+   }
+  },
+  "blockStatusList": {
+   "cmd": "47",
+   "dir": "reply",
+   "noChecksum": true
+  },
+  "setBypass": {
+   "cmd": "48",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2,
+      "const": 255
+     },
+     {
+      "name": "bypassed",
+      "type": "u16",
+      "septets": 3,
+      "min": 0,
+      "max": 1
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 1
+     }
+    ]
+   },
+   "reply": {
+    "message": "bypassReply",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     },
+     {
+      "reply": "param",
+      "request": "param"
+     }
+    ]
+   },
+   "source": {
+    "kind": "read-back"
+   }
+  },
+  "bypassReply": {
+   "cmd": "48",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "bypassed",
+      "type": "u16",
+      "septets": 3
+     },
+     {
+      "name": "unknown",
+      "type": "pad",
+      "length": 5
+     },
+     {
+      "name": "label",
+      "type": "string",
+      "length": 64,
+      "open": true
+     }
+    ]
+   }
+  },
+  "setChannel": {
+   "cmd": "49",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "channel",
+      "type": "u8",
+      "min": 0,
+      "max": 1
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 1
+     }
+    ]
+   },
+   "reply": {
+    "message": "channelReply",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     }
+    ]
+   }
+  },
+  "channelReply": {
+   "cmd": "49",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "channel",
+      "type": "u8"
+     }
+    ]
+   }
+  },
+  "getTempo": {
+   "cmd": "48",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "const": 40,
+      "note": "made up: the controllers block, which holds the tempo"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2,
+      "const": 32
+     },
+     {
+      "name": "bpm",
+      "type": "u16",
+      "septets": 3,
+      "const": 0
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 0
+     }
+    ]
+   },
+   "reply": {
+    "message": "tempoReply",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     },
+     {
+      "reply": "param",
+      "request": "param"
+     }
+    ]
+   }
+  },
+  "setTempo": {
+   "cmd": "48",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "const": 40,
+      "note": "made up: the controllers block, which holds the tempo"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2,
+      "const": 32
+     },
+     {
+      "name": "bpm",
+      "type": "u16",
+      "septets": 3,
+      "min": 30,
+      "max": 250
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 1
+     }
+    ]
+   },
+   "reply": {
+    "message": "tempoReply",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     },
+     {
+      "reply": "param",
+      "request": "param"
+     }
+    ]
+   }
+  },
+  "tempoReply": {
+   "cmd": "48",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "const": 40,
+      "note": "made up: the controllers block, which holds the tempo"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "bpm",
+      "type": "u16",
+      "septets": 3
+     },
+     {
+      "name": "unknown",
+      "type": "pad",
+      "length": 5
+     },
+     {
+      "name": "label",
+      "type": "string",
+      "length": 64,
+      "open": true
+     }
+    ]
+   }
+  },
+  "getParam": {
+   "cmd": "48",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "value",
+      "type": "u16",
+      "septets": 3,
+      "const": 0
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 0
+     }
+    ]
+   },
+   "reply": {
+    "message": "paramValue",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     },
+     {
+      "reply": "param",
+      "request": "param"
+     }
+    ]
+   }
+  },
+  "setParam": {
+   "cmd": "48",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "value",
+      "type": "u16",
+      "septets": 3
+     },
+     {
+      "name": "set",
+      "type": "u8",
+      "const": 1
+     }
+    ]
+   },
+   "reply": {
+    "message": "paramValue",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     },
+     {
+      "reply": "param",
+      "request": "param"
+     }
+    ]
+   }
+  },
+  "paramValue": {
+   "cmd": "48",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "value",
+      "type": "u16",
+      "septets": 3
+     },
+     {
+      "name": "unknown",
+      "type": "pad",
+      "length": 5
+     },
+     {
+      "name": "label",
+      "type": "string",
+      "length": 64,
+      "open": true
+     }
+    ]
+   }
+  },
+  "paramList": {
+   "cmd": "4b",
+   "dir": "request",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     }
+    ]
+   },
+   "reply": {
+    "message": "paramItem",
+    "echo": [
+     {
+      "reply": "block",
+      "request": "block"
+     }
+    ],
+    "list": {
+     "start": "listStart",
+     "end": "listEnd",
+     "maxItems": 256,
+     "maxBytes": 65536,
+     "deadlineMs": 5000
+    }
+   }
+  },
+  "paramItem": {
+   "cmd": "4b",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "block",
+      "type": "u16",
+      "septets": 2,
+      "enum": "block"
+     },
+     {
+      "name": "param",
+      "type": "u16",
+      "septets": 2
+     },
+     {
+      "name": "value",
+      "type": "u16",
+      "septets": 3
+     },
+     {
+      "name": "unknown",
+      "type": "pad",
+      "length": 5
+     },
+     {
+      "name": "label",
+      "type": "string",
+      "length": 64,
+      "open": true
+     }
+    ]
+   }
+  },
+  "listStart": {
+   "cmd": "4c",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "of",
+      "type": "u8"
+     },
+     {
+      "name": "count",
+      "type": "u16",
+      "septets": 2
+     }
+    ]
+   }
+  },
+  "listEnd": {
+   "cmd": "4d",
+   "dir": "reply",
+   "payload": {
+    "fields": [
+     {
+      "name": "of",
+      "type": "u8"
+     }
+    ]
+   }
+  },
+  "tunerData": {
+   "cmd": "4a",
+   "dir": "notify",
+   "noChecksum": true,
+   "payload": {
+    "fields": [
+     {
+      "name": "note",
+      "type": "u8",
+      "enum": "note"
+     },
+     {
+      "name": "string",
+      "type": "u8",
+      "bias": -1,
+      "note": "made up: 0 is the first string"
+     },
+     {
+      "name": "cents",
+      "type": "u8",
+      "bias": 63
+     }
+    ]
+   }
+  },
+  "storePreset": {
+   "cmd": "4e",
+   "dir": "send",
+   "payload": {
+    "fields": [
+     {
+      "name": "preset",
+      "type": "u16",
+      "septets": 2
+     }
+    ]
+   }
+  }
+ },
+ "layouts": {
+  "blockStatus": {
+   "size": 5,
+   "fields": [
+    {
+     "name": "bypassed",
+     "type": "u8",
+     "offset": 0,
+     "bits": {
+      "shift": 0,
+      "width": 1
+     },
+     "invert": true,
+     "note": "made up: the bit says engaged"
+    },
+    {
+     "name": "channel",
+     "type": "u8",
+     "offset": 0,
+     "bits": {
+      "shift": 1,
+      "width": 1
+     },
+     "invert": true,
+     "note": "made up: the bit says X"
+    },
+    {
+     "name": "block",
+     "type": "u16",
+     "septets": 2,
+     "offset": 3,
+     "bits": {
+      "shift": 3,
+      "width": 8
+     },
+     "enum": "block"
+    }
+   ]
+  }
+ },
+ "enums": {
+  "block": {
+   "input": 20,
+   "amp": 21,
+   "cab": 22,
+   "delay": 23,
+   "reverb": 24
+  },
+  "blockChannels": {
+   "amp": 2,
+   "cab": 2,
+   "delay": 2
+  },
+  "note": {
+   "a": 0,
+   "a_sharp": 1,
+   "b": 2,
+   "c": 3,
+   "c_sharp": 4,
+   "d": 5,
+   "d_sharp": 6,
+   "e": 7,
+   "f": 8,
+   "f_sharp": 9,
+   "g": 10,
+   "g_sharp": 11
+  },
+  "noBypass": {
+   "input": 1
+  }
+ },
+ "constants": {
+  "presetCount": 24,
+  "scenes": 8
+ },
+ "blocked": [
+  "storePreset"
+ ],
+ "firmwares": {
+  "2.04": {},
+  "2.05": {
+   "blocked": [
+    "setBypass",
+    "getTempo",
+    "setTempo",
+    "getParam",
+    "setParam"
+   ],
+   "messages": {
+    "setPreset": {
+     "cmd": "44",
+     "dir": "send",
+     "payload": {
+      "fields": [
+       {
+        "name": "preset",
+        "type": "u16",
+        "septets": 2,
+        "choice": "presetOrder",
+        "min": 0,
+        "max": 47
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ "parameters": {
+  "knobMax": 1000,
+  "groups": {
+   "amp": {
+    "blocks": [
+     "amp"
+    ],
+    "params": {
+     "Type": {
+      "id": 0,
+      "kind": "select",
+      "options": {
+       "0": "Clean",
+       "1": "Crunch",
+       "2": "Lead"
+      }
+     },
+     "Gain": {
+      "id": 1,
+      "kind": "knob"
+     },
+     "Bass": {
+      "id": 2,
+      "kind": "knob"
+     },
+     "Level": {
+      "id": 3,
+      "kind": "knob",
+      "note": "made up: shows -20.0 to 20.0 dB"
+     },
+     "Bright": {
+      "id": 5,
+      "kind": "switch",
+      "options": {
+       "0": "Off",
+       "1": "On"
+      }
+     },
+     "Stack": {
+      "id": 4,
+      "kind": "select",
+      "note": "made up: a selector whose option names the map lacks"
+     }
+    }
+   },
+   "delay": {
+    "blocks": [
+     "delay"
+    ],
+    "params": {
+     "Time": {
+      "id": 2,
+      "kind": "knob"
+     },
+     "Mix": {
+      "id": 17,
+      "kind": "knob",
+      "max": 500,
+      "note": "made up: a knob with a shorter travel than the map's knobMax"
+     },
+     "Voices": {
+      "id": 19,
+      "kind": "range",
+      "min": 2,
+      "max": 8,
+      "step": 2
+     }
+    }
+   }
+  }
+ },
+ "display": {
+  "deviceName": "Acme Rig Y",
+  "patchLabel": {
+   "pattern": "{index:3}",
+   "bankSize": 128
+  },
+  "rows": 4,
+  "emptyPatchName": "<EMPTY>",
+  "defaultSceneName": "Scene {n}",
+  "sceneLabel": "Scene {n}",
+  "channelNames": "XY"
+ },
+ "host": {
+  "midiPort": "Acme Rig Y",
+  "usb": {
+   "vid": "1234",
+   "pid": "ABCE"
+  },
+  "vendorApps": [
+   [
+    "rigedit",
+    "Rig-Edit"
+   ]
+  ]
+ },
+ "choices": {
+  "presetOrder": {
+   "what": "how this unit numbers presets",
+   "readBy": "getPreset",
+   "settle": "Switch to any preset on the unit itself, then ask again.",
+   "options": {
+    "msbFirst": {
+     "endian": "be"
+    },
+    "lsbFirst": {
+     "endian": "le"
+    }
+   }
+  }
+ }
+}

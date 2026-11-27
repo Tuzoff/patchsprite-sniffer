@@ -4,10 +4,11 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 
 - **Records** the messages passed between the device and its editor while you use the editor as normal.
 - **Sends captures to the Patchsprite cloud** under terms you accept the first time you use it. Observed data (the recorded messages and what they appear to control) is used to add support for your device. You keep a local copy.
-- **TypeScript.** Code is coming soon, together with a shared engine package for reading device map files and decoding device messages.
+- **TypeScript.** The sniffer is coming soon. Its shared engine package, [`@patchsprite/engine`](packages/engine), reads device map files and decodes device messages: a browser-safe main entry, and Node-only parts (map loading, the pedal lock, an RtMidi transport) under `@patchsprite/engine/node`. Build it with `npm run build`.
 
 ## Formats
 
+- [Device map](docs/formats/device-map.md): the protocol section of a device map (`schemas/device-map.v1.schema.json`), which the engine reads.
 - [Seed patch](docs/formats/seed-patch.md) (proposal): changes a unit's evidence makes to a seed device map, one change per entry, each with its evidence.
 
 Run the tests with `npm ci && npm test` (Node 22.18 or newer).

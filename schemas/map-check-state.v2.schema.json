@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "number",
+      "const": 2
+    },
+    "firmwares": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "pins": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "fp": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "at": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "option": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "fp",
+                "at",
+                "option"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "entries": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "fp": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "at": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "trust": {
+                  "type": "string",
+                  "enum": [
+                    "unsupported",
+                    "suspect",
+                    "shape-ok",
+                    "player-confirmed",
+                    "verified"
+                  ]
+                },
+                "why": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "app": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "fp",
+                "at",
+                "trust"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "pins",
+          "entries"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "firmwares"
+  ],
+  "additionalProperties": false,
+  "$id": "https://github.com/patchsprite-app/patchsprite-sniffer/schemas/map-check-state.v2.schema.json",
+  "title": "Patchsprite map-check state",
+  "description": "The marks one device's map entries hold, per firmware the unit reported. packages/engine/src/map-check-record.ts."
+}

@@ -9,6 +9,8 @@
     "packages/engine"
   ],
   "scripts": {
+    "build": "npm run build -w @patchsprite/engine",
+    "pretest": "npm run build",
     "test": "node --test \"packages/*/test/*.test.ts\"",
     "typecheck": "tsc --noEmit -p .",
     "schemas": "node scripts/gen-schemas.ts"

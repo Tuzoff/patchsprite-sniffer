@@ -1,15 +1,51 @@
 {
   "name": "@patchsprite/engine",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Device maps for MIDI and SysEx devices: the map schema, a generic codec and framing engines (browser-safe), with map loading, the pedal lock and an RtMidi transport for Node.",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/patchsprite-app/patchsprite-sniffer.git",
+    "directory": "packages/engine"
+  },
   "engines": {
     "node": ">=22.18"
   },
   "exports": {
-    "./seed-patch": "./src/seed-patch.ts",
-    "./canonical-json": "./src/canonical-json.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "node": "./dist/node/index.js"
+    },
+    "./seed-patch": {
+      "types": "./dist/seed-patch.d.ts",
+      "default": "./dist/seed-patch.js"
+    },
+    "./canonical-json": {
+      "types": "./dist/canonical-json.d.ts",
+      "default": "./dist/canonical-json.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "patchsprite-pedal-lock": "./bin/pedal-lock.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "vectors"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "prepublishOnly": "npm run build && node --test \"test/*.test.ts\""
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "zod": "4.6.7"

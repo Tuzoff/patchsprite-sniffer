@@ -1,0 +1,19 @@
+{
+  "about": "When two cmd templates can be the same bytes (cmdsOverlap, and BlockedCmds asked about one cmd added to it): as many tokens, and each the same byte or a {placeholder} on either side. Hex is matched without case. Shared by the Patchsprite app and the sniffer; the cmds are made up.",
+  "pairs": [
+    { "a": "10", "b": "10", "overlap": true },
+    { "a": "10", "b": "11", "overlap": false },
+    { "a": "10", "b": "10 00", "overlap": false },
+    { "a": "10 {n}", "b": "10 05", "overlap": true },
+    { "a": "10 05", "b": "10 {n}", "overlap": true },
+    { "a": "{group} 05", "b": "10 {n}", "overlap": true },
+    { "a": "{group} 05", "b": "10 06", "overlap": false },
+    { "a": "{a} {b}", "b": "7f 00", "overlap": true },
+    { "a": "{a} {b}", "b": "7f 00 01", "overlap": false },
+    { "a": "3c 01 {x}", "b": "3c 02 {x}", "overlap": false },
+    { "a": "3c 0A", "b": "3c 0a", "overlap": true },
+    { "a": "01 02 03 04 05 06 07 08", "b": "01 02 03 04 05 06 07 08", "overlap": true },
+    { "a": "01 02 03 04 05 06 07 08", "b": "01 02 03 04 05 06 07 09", "overlap": false },
+    { "a": "01 02 03 04 05 06 07 {last}", "b": "01 02 03 04 05 06 07 09", "overlap": true }
+  ]
+}
