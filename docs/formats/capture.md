@@ -1,8 +1,9 @@
 # Capture format
 
 **Status: version 1, first draft.** The sniffer is the first thing that writes it. Field names may still change until
-the sniffer has recorded a real session; after that, renaming or removing a key needs version 2, and adding one
-doesn't.
+the sniffer has recorded a real session; after that, renaming or removing a key or a value needs version 2. Adding a
+key, or a value to a list of values (a new `method`, `platform`, record `kind` or flag), doesn't: it stays version 1,
+and a reader older than the addition refuses only the lines that use it, naming the line.
 
 A capture is what the sniffer records while a vendor editor talks to a device: every MIDI message in both directions,
 with its time, the session's own events (attached to the editor, a port opened), and the steps the user or the walk
