@@ -9,7 +9,15 @@
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["packages/*/src", "packages/*/bin", "packages/*/test", "scripts"]
+  "include": [
+    "packages/*/src",
+    "packages/*/bin",
+    "packages/*/test",
+    "packages/*/test-windows",
+    "scripts"
+  ]
 }

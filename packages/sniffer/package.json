@@ -7,6 +7,10 @@
   "engines": {
     "node": ">=22.18"
   },
+  "exports": {
+    "./walk/shot": "./src/walk/shot.ts",
+    "./walk/host": "./src/walk/host.ts"
+  },
   "bin": {
     "patchsprite-sniff": "./bin/sniff.ts"
   },
