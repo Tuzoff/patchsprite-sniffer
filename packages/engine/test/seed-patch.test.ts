@@ -746,6 +746,18 @@ test("with block separations from the caller, a change that may lift a block nam
     "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
     "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
   ]);
+  // a mode's pair on a firmware falls back to that firmware's pair before the base pair
+  const onFwPair = { firmware: "2.0", send: "storeScene", blocked: "factoryReset", by: "byte 2: 07 vs 00" };
+  const modeOnFw = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    onFwPair,
+    ...(map === base ? [] : [{ ...onFwPair, mode: "live", by: "byte 1: 05 vs 00" }]),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeOnFw), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 2: 07 vs 00 to byte 1: 05 vs 00",
+  ]);
   // a mode that isn't a string is something else: the plain reason
   assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), () => [{ mode: 1, send: "storeScene", blocked: "factoryReset", by: "x" }] as any), [
     "may lift a block: changes what tells a blocked message from a send on its cmd",
