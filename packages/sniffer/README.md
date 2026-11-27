@@ -35,10 +35,11 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
     is refused.
   - A blank frame (all white or all black) is retaken, three tries by default, and never handed to the model.
 - `editor_input` (`input.ts`): click, double-click, right-click, wheel, drag, keys and typed text, at points on the
-  latest shot. Input lands only on the editor's own windows: a point covered by another window (a chat app's
+  latest shot, so inside the editor's main window (a menu or list that opens past its edge can't be clicked; use keys).
+  Input lands only on the editor's own windows: a point covered by another window (a chat app's
   overlay, say) is retried for 30 s and then refused, and keys are sent only while one of the editor's windows is in
   front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
-  refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
+  (or write, flash, install, overwrite or import) is refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
   controls hide their names, so the walk prompt's guardrails still apply there.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.

@@ -63,6 +63,11 @@ public static class WalkWin {
 
   public static bool Front(IntPtr h) {
     if (GetForegroundWindow() == h) return true;
+    // One of the editor's own windows in front (a modal dialog, a popup menu) keeps the focus: taking it back to
+    // the main window would send typed text to the wrong place, or trigger a menu shortcut.
+    uint fgPid, ownPid;
+    GetWindowThreadProcessId(GetForegroundWindow(), out fgPid); GetWindowThreadProcessId(h, out ownPid);
+    if (fgPid == ownPid) return true;
     // Windows lets only the foreground thread hand over focus: borrow its input queue for the call.
     uint pid;
     uint me = GetCurrentThreadId(), fg = GetWindowThreadProcessId(GetForegroundWindow(), out pid),

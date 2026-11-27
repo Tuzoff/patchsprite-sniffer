@@ -26,7 +26,7 @@ export class InputError extends Error {}
 /** Controls a click never reaches without the user's say-so: firmware and updates, factory reset, storing or
  * deleting presets, accounts, uploads. Matched on the control's name as Windows UI Automation reports it; an editor
  * that draws its own controls hides them from it, so the walk prompt's guardrails still apply. */
-export const HAZARD = /firmware|update|upgrade|factory|reset|initiali[sz]e|restore|\bstore\b|delete|erase|format|sign[ -]?in|log[ -]?in|account|upload|download|cloud|share/i;
+export const HAZARD = /firmware|update|upgrade|factory|reset|initiali[sz]e|restore|\bstore\b|delete|erase|format|sign[ -]?in|log[ -]?in|account|upload|download|cloud|share|\bwrite\b|flash|install|overwrite|import/i;
 
 /** The virtual-key codes of a combination such as "ctrl+z". */
 export function keyCodes(combo: string): number[] {
