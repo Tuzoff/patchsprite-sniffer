@@ -28,6 +28,9 @@ The CLA applies to every part of this repository, including the shared engine pa
   `docs/requirements.md` (or says `none (why)`), as the template lays out. For a pull request from outside the team, a
   maintainer runs the reviews and ticks the boxes.
 - **CLA**: CLA Assistant, as above.
+- **`spec-review`**: maintainers check the change against the sniffer's spec and the Patchsprite app's scope, and add
+  `spec-ok: sniffer` and `spec-ok: scope` once both are OK (or `spec-review: not needed` for CI and tooling
+  changes). It fails until then; a maintainer will tell you if anything needs changing.
 
 Issue and pull request text is public, and only titles and bodies are checked, for the plans above; comments are not
 read at all. Don't paste captures, SysEx dumps or vendor files into any of it. Use the sniffer's upload to share a
