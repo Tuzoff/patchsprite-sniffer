@@ -1,7 +1,7 @@
 // The capture's hold on the device (src/hold.ts), each test in its own temp PATCHSPRITE_HOME.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -124,4 +124,28 @@ test("past 4096 different messages, traffic renews nothing, and a lock file it c
   assert.equal(hold2.use(true), undefined);
   assert.equal(hold2.use(true), undefined);
   assert.equal(notes.filter((n) => n.startsWith("warning: could not renew the device's lock")).length, 1, notes.join("; "));
+});
+
+test("a lock file it can't handle is said again after the lock worked in between, never with its path", () => {
+  const e = env();
+  const notes: string[] = [];
+  const hold = DeviceHold.take(e, (kind, text) => notes.push(`${kind}: ${text}`));
+  const breakIt = () => {
+    rmSync(e.PATCHSPRITE_HOME, { recursive: true, force: true });
+    writeFileSync(e.PATCHSPRITE_HOME, "");
+  };
+  const warnings = () => notes.filter((n) => n.startsWith("warning: could not renew the device's lock"));
+  breakIt();
+  assert.equal(hold.use(true), undefined);
+  assert.equal(hold.use(true), undefined);
+  assert.equal(warnings().length, 1, notes.join("; "));
+  rmSync(e.PATCHSPRITE_HOME, { force: true });
+  mkdirSync(e.PATCHSPRITE_HOME);
+  assert.equal(hold.use(true), undefined);
+  assert.equal(readPedalLock(e)?.owner, OWNER, "the lock works again: taken");
+  breakIt();
+  assert.equal(hold.use(true), undefined);
+  assert.equal(warnings().length, 2, "a new outage is said again");
+  assert.ok(notes.every((n) => !n.includes(e.PATCHSPRITE_HOME)), "no path in the capture");
+  rmSync(e.PATCHSPRITE_HOME, { force: true });
 });
