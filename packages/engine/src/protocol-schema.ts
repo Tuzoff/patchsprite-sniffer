@@ -8,6 +8,7 @@
 // enumerating elements, and lookups by name never reach inherited object properties.
 
 import { z } from "zod";
+import { ControlsSchema, controlsIssues } from "./channel-messages.ts";
 import type { KnownCmd } from "./framing.ts";
 import { cmdsOverlap, tokensBegin } from "./cmd-overlap.ts";
 import { choiceEntry, type UnitChecks } from "./map-checks.ts";
@@ -317,7 +318,7 @@ export const LayoutSchema = z.strictObject({
 export type Layout = z.infer<typeof LayoutSchema>;
 
 /** The ways a device is driven (a map's `driver`). */
-export const DRIVERS = ["patch-dump", "param-change"] as const;
+export const DRIVERS = ["patch-dump", "param-change", "control-only"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 // ---- measured values --------------------------------------------------------------------------------------------
@@ -512,7 +513,17 @@ const AddressTransportSchema = z.strictObject({
   timing: TimingSchema,
 });
 
-const TransportSchema = z.discriminatedUnion("framing", [NibbleTransportSchema, XorTransportSchema, PlainTransportSchema, AddressTransportSchema]);
+/**
+ * No SysEx: the unit takes MIDI channel messages only (the map's `controls`), so the map has no messages or layouts.
+ * The timing's frame gap is the pause between two channel messages.
+ */
+const ChannelTransportSchema = z.strictObject({
+  framing: z.literal("midi-channel"),
+  endian: endian.default("le"),
+  timing: TimingSchema.extend({ replyTimeoutMs: nonNeg.default(0), ackTimeoutMs: nonNeg.default(0) }).default({ frameGapMs: 0, replyTimeoutMs: 0, ackTimeoutMs: 0 }),
+});
+
+const TransportSchema = z.discriminatedUnion("framing", [NibbleTransportSchema, XorTransportSchema, PlainTransportSchema, AddressTransportSchema, ChannelTransportSchema]);
 export type Transport = z.infer<typeof TransportSchema>;
 export type NibbleTransport = z.infer<typeof NibbleTransportSchema>;
 export type XorTransport = z.infer<typeof XorTransportSchema>;
@@ -521,6 +532,8 @@ export type AddressTransport = z.infer<typeof AddressTransportSchema>;
 
 /** The shortest and longest cmd the transport allows. */
 export function cmdLengths(t: Transport): { min: number; max: number } {
+  // a "midi-channel" transport frames no SysEx, so it has no inner frame
+  if (!("inner" in t)) return { min: 1, max: 1 };
   const c = t.inner.cmdLength;
   return typeof c === "number" ? { min: c, max: c } : c;
 }
@@ -938,7 +951,8 @@ const ProtocolBase = z.strictObject({
   /**
    * How the device is driven, stated by the map rather than guessed from its framing: "patch-dump" (the unit hands
    * over and takes whole patches as one record the map lays out) or "param-change" (the unit
-   * is addressed one message at a time: preset, scene, block bypass and channel, one parameter per message). A map the
+   * is addressed one message at a time: preset, scene, block bypass and channel, one parameter per message) or
+   * "control-only" (the unit takes MIDI channel messages, its `controls`, and answers none: nothing is read back). A map the
    * sniffer builds states it (parseDeviceMap refuses one that doesn't); parseProtocol reads one without it as
    * "patch-dump", for the maps written before the field was required.
    */
@@ -952,6 +966,8 @@ const ProtocolBase = z.strictObject({
     }, z.enum(DRIVERS))
     .optional(),
   parameters: ParametersSchema.optional(),
+  /** MIDI channel messages the unit takes (CC, program change with bank select, NRPN): see channel-messages.ts. */
+  controls: ControlsSchema.optional(),
   /** Encodings the docs disagree on, settled per unit (fields name them with `choice`). */
   choices: cappedRecord(name, ChoiceSchema, MAX_CHOICES, "choices").optional(),
   /** Patch slots Patchsprite may use as scratch (compare_patch parks the edits there), labels as the device spells
@@ -1553,6 +1569,7 @@ function crossCheck(p: ProtocolShape): string[] {
     if (new Set(bypass).size !== bypass.length) floor.push("audio.reamp: bypassOutputs lists an output twice");
     for (const o of bypass) if (o > r.channels) floor.push(`audio.reamp: bypass output ${o} is past the ${r.channels} channels`);
   }
+  floor.push(...channelIssues(p));
   if (floor.length) return floor;
   const enums = p.enums ?? {};
   const cmdLength = cmdLengths(p.transport);
@@ -1616,6 +1633,18 @@ function crossCheck(p: ProtocolShape): string[] {
     for (const issue of checkView(view, cmdLength, scope)) if (!out.has(issue)) out.add(`firmware ${fw}: ${issue}`);
   }
   return [...out].slice(0, MAX_ISSUES);
+}
+
+/** What a map's channel messages need: a control-only map has some, and a channel-only transport carries nothing else. */
+function channelIssues(p: ProtocolShape): string[] {
+  const out = p.controls ? controlsIssues(p.controls, p.enums ?? {}) : [];
+  const c = p.controls;
+  if (p.driver === "control-only" && !(c && (Object.keys(c.items).length || c.presets))) out.push('driver "control-only" needs controls: items or presets');
+  if (p.transport.framing === "midi-channel") {
+    if (p.driver !== "control-only") out.push('a "midi-channel" transport carries channel messages only: its map needs driver "control-only"');
+    if (Object.keys(p.messages).length || Object.keys(p.layouts).length || p.firmwares) out.push('a "midi-channel" transport sends no SysEx: messages and layouts stay empty, and there are no firmwares');
+  }
+  return out.slice(0, MAX_ISSUES);
 }
 
 const lengthText = (r: { min: number; max: number }) => (r.min === r.max ? `${r.min}` : `${r.min} to ${r.max}`);

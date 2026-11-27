@@ -25,7 +25,7 @@ lists, so a firmware carries only what it changes (see [Versioning per firmware]
 ```jsonc
 {
   "schema": 1,
-  "driver": "param-change", // "patch-dump" or "param-change"
+  "driver": "param-change", // "patch-dump", "param-change" or "control-only"
   "transport": {...},       // framing, checksum, nibbles, chunking, compression, timing
   "messages":  {...},       // named messages: cmd, direction, payload layout, reply/ack pairing
   "layouts":   {...},       // shared record layouts: stored records, file formats, list replies
@@ -59,6 +59,8 @@ How the device is driven, so code reads it rather than guessing from the framing
 - `"param-change"`: the unit is addressed one message at a time: which preset and scene is on, each block's bypass
   and channel, one parameter per message. The Patchsprite app never holds or writes a whole preset. Scenes, block channels and
   the unit's own parameter list are optional, and a change may be a `send`, or answered by an acknowledgement only.
+- `"control-only"`: the unit takes the MIDI channel messages its `controls` name (presets, scenes, footswitches,
+  expression, parameters by CC or NRPN) and answers none of them; nothing is read back. See `controls`.
 
 `parseProtocol` reads a map without `driver` as `"patch-dump"`. A map the sniffer builds must state it:
 `DeviceMapSchema` and `parseDeviceMap` refuse one without it (S19). The old names `"patch"` and `"rig"` are refused
@@ -152,6 +154,13 @@ A unit may answer one read in several messages at successive addresses. `Address
 joins them in any order (a piece sent again must carry the same bytes); anything else is left for its own handler. A
 dropped piece leaves the read unanswered; a piece running past the size is refused. At most 65536 bytes
 (`MAX_RECORD`) are joined.
+
+### `"midi-channel"` (no SysEx)
+
+The unit takes only the channel messages in `controls`, so `messages` and `layouts` stay empty, there are no
+`firmwares`, and `driver` must be `"control-only"`. Its keys are `endian` (default `"le"`, unused) and `timing`
+(default all 0), whose `frameGapMs` is the pause between two channel messages. A unit that takes SysEx and channel
+messages both keeps its SysEx framing and adds `controls`.
 
 ## `messages`
 
@@ -563,10 +572,54 @@ edit mode, a handshake). Optional; the param-change driver runs it.
 - The steps use the base map's messages: they go out before the firmware is known, so a firmware's own definitions do
   not apply to them.
 - A request the unit leaves unanswered fails the connection as a silent unit does.
+- So every step must be safe to repeat: the steps go out again on every open, a replug or a retry after silence
+  included. A handshake the unit accepts only once doesn't fit here.
 
 Checked at load: each message is one the map has, a `request` or `send`, neither blocked nor redefined (nor its named
 layout) on any firmware, nor blocked in the base map; each `values` key is a field of its payload; and no payload field
 names a choice (settling it would ask the unit, which answers nothing until the steps have gone out).
+
+## `controls` (channel messages)
+
+MIDI channel messages, which need no framing engine: Control Change, Program Change with Bank Select, and NRPN. They
+are fire-and-forget. The engine is `ChannelCodec` in `packages/engine/src/channel-messages.ts`. Any map may have
+`controls`: a `"control-only"` map is driven by them alone, and a SysEx map can carry them too.
+
+```jsonc
+"controls": {
+  "channel": { "default": 1, "omni": true, "where": "Settings > MIDI > Channel" },
+  "items": {
+    "sceneSelect": { "type": "cc", "cc": 20, "label": "Scene", "group": "scene", "enum": "scene" },
+    "footswitch1": { "type": "cc", "cc": 21, "label": "Footswitch 1", "group": "stomp", "press": { "value": 127, "release": 0 } },
+    "drive":       { "type": "nrpn", "msb": 1, "lsb": 2, "bits": 14, "max": 16383 },
+    "looperState": { "type": "cc", "cc": 22, "dir": "notify" }
+  },
+  "presets": { "count": 200, "bank": "msb", "perBank": 100, "settleMs": 500 }
+}
+```
+
+- `channel`: the unit's receive channel is a setting on the unit, which no message reads back. `default` (1-16) is its
+  factory setting, `omni` that it can listen on every channel, `where` where the player changes it. The player's own
+  channel is kept per unit by the app, which puts it in each status byte.
+- `items`, keyed by camelCase name (at most 4096):
+  - `type`: `"cc"` (`cc` 0-119; 120-127 are channel mode messages and never sent), `"pc"`, or `"nrpn"` (`msb` and
+    `lsb` the parameter number, sent as CC99 then CC98; `bits` 7 sends the value as CC6, 14 as CC6 with its top 7
+    bits then CC38 with its low 7).
+  - `min`, `max`: the range sent (default the whole range: 0-127, or 0-16383 for a 14-bit NRPN). `enum`: an enum in
+    `enums` whose keys are accepted. `allowed`: the only values ever sent. `press`: `{ "value", "release"? }` for a
+    footswitch-like control: a press sends `value`, then `release` when given.
+  - `label` (how the player names it) and `group` (what kind of control: "scene", "stomp", "tuner") are for listing.
+  - `dir`: `"send"` (default), `"notify"` (the unit sends it unasked; never sent) or `"both"`. An NRPN is `"send"`
+    only.
+- `presets` (optional): preset select. Preset *n* (0-based) is bank *n* / `perBank` (default 128) and program
+  *n* % `perBank`, sent as Bank Select then Program Change. `bank` says which Bank Select controllers carry the bank:
+  `"none"`, `"msb"` (CC0), `"lsb"` (CC32), or `"msb-lsb"` (CC0 the bank's top 7 bits, CC32 its low 7). `count`
+  presets must fit the banks. `settleMs`: how long nothing is sent after a preset change.
+
+Checked at load: ranges, enum keys, and allowed and press values the control can carry; two controls that would send
+the same message; a plain CC on a controller NRPN writes use (6, 38, 96-101) when the map has NRPN controls; a plain
+CC on a Bank Select controller `presets` uses; a `"pc"` control beside `presets`. A `"control-only"` map needs
+`items` or `presets`.
 
 ## `scratch`
 

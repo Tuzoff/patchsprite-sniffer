@@ -2,6 +2,7 @@
 // Node-only code (atomic files, map loading from folders, the RtMidi transport) is in "@patchsprite/engine/node".
 
 export * from "./canonical-json.ts";
+export * from "./channel-messages.ts";
 export * from "./cmd-overlap.ts";
 export * from "./framing.ts";
 export * from "./labels.ts";

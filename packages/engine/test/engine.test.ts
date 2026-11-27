@@ -22,6 +22,7 @@ import {
   ProtocolCodec,
   ProtocolSchema,
   bestMidiPortMatches,
+  ChannelCodec,
   weakest,
   type MeasuredField,
 } from "../src/index.ts";
@@ -134,4 +135,28 @@ test("LZO, labels and port names", () => {
 test("ENGINE_VERSION is package.json's version", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(ENGINE_VERSION, pkg.version);
+});
+
+test("a control-only map: channel messages only, encoded and heard by ChannelCodec", () => {
+  const map = {
+    schema: 1,
+    driver: "control-only",
+    transport: { framing: "midi-channel" },
+    messages: {},
+    layouts: {},
+    controls: {
+      channel: { default: 1 },
+      items: { drive: { type: "nrpn", msb: 1, lsb: 2, bits: 14 }, scene: { type: "cc", cc: 20, max: 3 }, looper: { type: "cc", cc: 22, dir: "notify" } },
+      presets: { count: 200, bank: "msb", perBank: 100 },
+    },
+  };
+  const p = parseDeviceMap(map);
+  const codec = new ChannelCodec(p.controls!);
+  assert.deepEqual(codec.encode("scene", 2, 1).map((m) => [...m]), [[0xb0, 20, 2]]);
+  assert.throws(() => codec.encode("scene", 4, 1), /scene/);
+  assert.deepEqual(codec.preset(150, 2).map((m) => [...m]), [[0xb1, 0, 1], [0xc1, 50]]);
+  assert.equal(codec.encode("drive", 16383, 1).length, 4, "CC99, CC98, then the value's top and low 7 bits");
+  assert.ok(codec.decode(Uint8Array.of(0xb0, 22, 1), 1));
+  assert.throws(() => parseDeviceMap({ ...map, driver: "param-change" }), /needs driver "control-only"/);
+  assert.throws(() => parseDeviceMap({ ...map, messages: { x: { cmd: "01", dir: "send" } } }), /sends no SysEx/);
 });
