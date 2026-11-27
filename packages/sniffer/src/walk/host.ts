@@ -73,6 +73,8 @@ export interface WindowHost {
   type(pid: number, text: string): Promise<InputResult>;
   /** The UI Automation element at a point, when it is the editor's. */
   element(pid: number, x: number, y: number): Promise<{ found: false } | { found: true; element: UiElement }>;
+  /** The UI Automation element that has the keyboard focus, when it is the editor's. */
+  focused(pid: number): Promise<{ found: false } | { found: true; element: UiElement }>;
   /** The editor's standard Windows file and folder dialogs. */
   dialogs(pid: number): Promise<{ dialogs: DialogInfo[] }>;
   /** Types a path into a dialog's edit box and presses the button with that caption. */
@@ -169,6 +171,10 @@ export class PowerShellHost implements WindowHost {
 
   async element(pid: number, x: number, y: number) {
     return (await this.#call("element", { pid, x, y })) as unknown as { found: false } | { found: true; element: UiElement };
+  }
+
+  async focused(pid: number) {
+    return (await this.#call("focused", { pid })) as unknown as { found: false } | { found: true; element: UiElement };
   }
 
   async dialogs(pid: number) {

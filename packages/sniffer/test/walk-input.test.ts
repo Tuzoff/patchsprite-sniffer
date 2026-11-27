@@ -130,6 +130,22 @@ test("a click on a firmware, reset or store control is refused until the user ap
   }
 });
 
+test("enter, space, delete and backspace on a focused hazard control are refused until the user approves", async () => {
+  const focusedOn = (name: string) => async () => ({ found: true as const, element: { name, controlType: "Button", automationId: "", className: "", enabled: true, rect: RECT } });
+  for (const combo of ["enter", "space", "delete", "backspace", "ctrl+enter"]) {
+    const { host, log } = inputHost(0, { focused: focusedOn("Factory Reset") });
+    await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep(`key:${combo}`)]), /focused control is "Factory Reset"/, combo);
+    assert.equal(log.filter((l) => l.startsWith("keys")).length, 0, combo);
+    await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved: true }, [parseStep(`key:${combo}`)]);
+    assert.equal(log.filter((l) => l.startsWith("keys")).length, 1, combo);
+  }
+  const { host, log } = inputHost(0, { focused: focusedOn("Factory Reset") });
+  await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, ["key:tab", "key:ctrl+z", "type:abc"].map(parseStep));
+  assert.equal(log.filter((l) => !l.startsWith("front")).length, 3, "other keys don't press the focused control");
+  const ok = inputHost(0, { focused: focusedOn("Gain") });
+  await runSteps({ host: ok.host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("key:enter")]);
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);
@@ -186,7 +202,6 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
   for (const [path, why] of [
     [join(root, "..", "elsewhere.prst"), /inside the capture's folder/],
     [join(tmpdir(), "user-presets", "mine.prst"), /inside the capture's folder/],
-    [root, /inside the capture's folder/],
     ["relative.prst", /full path/],
     [join(root, "update.BIN"), /\.bin file/],
     [join(root, "fw.syx"), /\.syx file may be saved, never opened/],
@@ -206,4 +221,5 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
   assert.equal(filled, 2, "a backup may be saved as SysEx");
   await assert.rejects(fillDialog(d, "Save As", join(root, "x.bin"), "Save"), /\.bin file/);
   assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
+  assert.equal(checkDialogPath(root, root), root, "a folder picker may be pointed at the folder itself");
 });

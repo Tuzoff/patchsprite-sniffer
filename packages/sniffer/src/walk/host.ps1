@@ -364,6 +364,11 @@ function Invoke-Op($req) {
       if (-not $e -or $e.Current.ProcessId -ne [int]$req.pid) { return @{ found = $false } }
       return @{ found = $true; element = (Element-Json $e) }
     }
+    'focused' {
+      $e = [Windows.Automation.AutomationElement]::FocusedElement
+      if (-not $e -or $e.Current.ProcessId -ne [int]$req.pid) { return @{ found = $false } }
+      return @{ found = $true; element = (Element-Json $e) }
+    }
     'dialogs' { return @{ dialogs = @([WalkDialog]::Dialogs([uint32]$req.pid) | ForEach-Object { Dialog-Json $_ }) } }
     'fill' {
       $d = @([WalkDialog]::Dialogs([uint32]$req.pid) | Where-Object { [WalkDialog]::Text($_) -eq $req.title })

@@ -135,6 +135,8 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         // A drag presses and releases like a click, so both its ends are checked too.
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
         if (step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, { op: step.op, x: step.x1, y: step.y1 }, n);
+        // Enter, space and delete act on whatever control has the focus, so they are checked like a click on it.
+        if (step.op === "key" && PRESS_KEYS.some((k) => keyCodes(step.combo).includes(k))) await refuseFocusedHazard(d.host, win.pid, step.combo, n);
       }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
@@ -144,6 +146,16 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
       await sleep(d.retryMs ?? 1000);
     }
     await sleep(50);
+  }
+}
+
+/** Keys that press or delete the focused control: enter, space, delete, backspace. */
+const PRESS_KEYS = [0x0d, 0x20, 0x2e, 0x08];
+
+async function refuseFocusedHazard(host: WindowHost, pid: number, combo: string, n: number) {
+  const f = await host.focused(pid);
+  if (f.found && HAZARD.test(f.element.name)) {
+    throw new InputError(`step ${n + 1} (key:${combo}) refused: the focused control is "${f.element.name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
   }
 }
 

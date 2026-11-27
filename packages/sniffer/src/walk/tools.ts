@@ -2,8 +2,7 @@
 // reading a control through UI Automation, and the editor's file dialogs. They work only while a capture runs: the
 // capture names the editor, holds the pedal lock for the whole session and records what every input makes the
 // editor send. Shots are saved beside the capture, in a folder of its own.
-import { readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
 import { z } from "zod";
 import { refused, ro, text, type RegisterTools } from "../mcp/server.ts";
 import { PowerShellHost, type WindowHost } from "./host.ts";
@@ -16,6 +15,10 @@ const input = { readOnlyHint: false, destructiveHint: true, idempotentHint: fals
 
 /** A capture's screenshot folder: beside the capture file, named after it. */
 export const shotsDir = (captureFile: string): string => captureFile.replace(/\.jsonl$/, "") + ".shots";
+
+/** A capture's own folder for files its walk saves or opens through a dialog (backups, exports): beside the capture,
+ * named after it, so a dialog can't reach another capture, its shots or anything else. */
+export const filesDir = (captureFile: string): string => captureFile.replace(/\.jsonl$/, "") + ".files";
 
 export interface WalkToolOptions {
   /** Makes the window host for a capture's shot folder (default: PowerShell on Windows). */
@@ -39,7 +42,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
         current?.host.close();
         current = { file, host: makeHost(shotsDir(file)) };
       }
-      return { app, host: current.host, dir: shotsDir(file), files: dirname(file) };
+      return { app, host: current.host, dir: shotsDir(file), files: filesDir(file) };
     };
     // The capture holds the pedal lock from start to stop; input needs it still running at the moment it is sent.
     const beforeInput = async () => {
@@ -132,13 +135,14 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     server.registerTool(
       "fill_dialog",
       {
-        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. The path must be inside the capture's folder (shown by capture_status), so nothing else can be opened or saved over; firmware, update and program files are refused, and SysEx or MIDI files may be saved but never opened.",
+        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. The path must be inside the capture's own files folder (the capture file's name with .files instead of .jsonl), so nothing else can be opened or saved over; firmware, update and program files are refused, and SysEx or MIDI files may be saved but never opened.",
         inputSchema: { title: z.string().min(1).max(200), path: z.string().min(1).max(1024), button: z.string().min(1).max(100) },
         annotations: input,
       },
       async ({ title, path, button }) => {
         try {
           const s = session();
+          await mkdir(s.files, { recursive: true });
           const left = await fillDialog({ host: s.host, app: s.app, scale, beforeInput, allowedRoot: s.files }, title, path, button);
           return text(left.length ? `Done. Still open: ${left.map((t) => JSON.stringify(t)).join(", ")}.` : "Done. No dialog is open now.", { remaining: left });
         } catch (e) {

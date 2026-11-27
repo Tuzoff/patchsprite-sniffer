@@ -63,7 +63,7 @@ export function checkDialogPath(root: string, path: string, save = false): strin
   if (!isAbsolute(path)) throw new InputError("give the dialog a full path, inside the capture's folder");
   const full = resolve(path);
   const rel = relative(resolve(root), full);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+  if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new InputError(`a dialog may only be pointed inside the capture's folder (${resolve(root)}), so nothing else on the computer can be opened or overwritten`);
   }
   // Windows drops a name's trailing dots and spaces ("update.bin." opens update.bin) and reads "name:stream" as a

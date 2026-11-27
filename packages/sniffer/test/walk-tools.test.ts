@@ -10,7 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/mcp/server.ts";
 import { Recorder } from "../src/recorder.ts";
 import type { WindowHost } from "../src/walk/host.ts";
-import { shotsDir, walkTools } from "../src/walk/tools.ts";
+import { filesDir, shotsDir, walkTools } from "../src/walk/tools.ts";
 import { fakeWindowHost } from "./fake-window-host.ts";
 import { FakeDevice } from "./fake-frida.ts";
 
@@ -97,13 +97,17 @@ test("during a capture: a shot of the capture's editor beside the capture, then 
   assert.equal((ctl.data!.control as { value: string }).value, "-6.0");
 
   assert.match((await call("list_dialogs")).text, /Save As/);
-  const backup = join(dirname(file), "walk-backup.prst");
+  const backup = join(filesDir(file), "walk-backup.syx");
   const filled = await call("fill_dialog", { title: "Save As", path: backup, button: "Save" });
   assert.equal(filled.error, false, filled.text);
   assert.ok(log.includes(`fill Save As ${backup} Save`));
-  const outside = await call("fill_dialog", { title: "Open", path: join(tmpdir(), "firmware.prst"), button: "Open" });
-  assert.equal(outside.error, true);
-  assert.match(outside.text, /inside the capture's folder/);
+  for (const path of [join(tmpdir(), "firmware.prst"), file, join(dirname(file), "other-capture.jsonl"), join(shotsDir(file), "main-view.png")]) {
+    const outside = await call("fill_dialog", { title: "Save As", path, button: "Save" });
+    assert.equal(outside.error, true, path);
+    assert.match(outside.text, /inside the capture's folder/, path);
+  }
+  const open = await call("fill_dialog", { title: "Open", path: join(filesDir(file), "walk-backup.syx"), button: "Open" });
+  assert.match(open.text, /never opened/);
 
   await recorder.stop();
   const after = await call("editor_input", { steps: ["click:1,1"] });
