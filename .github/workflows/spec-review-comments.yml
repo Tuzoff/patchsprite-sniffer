@@ -1,0 +1,81 @@
+name: spec-review-comments
+
+# The spec reviewers' verdicts, from their comments (Dmitry, 27 Nov 2026), as in the Patchsprite app. A comment on a
+# pull request with a line "Spec review: OK (sniffer)" or "Spec review: OK (scope)" adds that review's label
+# (spec-ok: sniffer, spec-ok: scope), and "Spec review: withdrawn (sniffer)" or "(scope)" takes it off. Labels are
+# added one at a time (POST), never by replacing the list, so two reviewers answering at once can't drop each other's
+# label, as a whole-list label write did.
+#
+# A label this token adds starts no workflow, so the spec-review check (which reads the labels as they are now) is then
+# re-run on the pull request's newest spec-review run.
+#
+# It reads only the comment and the pull request's number, and runs no code from any branch. Only comments by people
+# with write access count: in this public repo anyone can comment. No secrets: this repo's CI never gets any.
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+# No concurrency group: GitHub keeps one pending run per group and cancels the older one, so a third comment could drop
+# a pending verdict. Runs in parallel are harmless: each label write is one POST or DELETE.
+
+jobs:
+  label:
+    name: spec-review-comments
+    if: >-
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      contains(github.event.comment.body, 'Spec review:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # add or remove the spec-ok label
+      issues: write # the same labels, through the issues API
+      actions: write # re-run the spec-review check
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.issue.number }}
+      BODY: ${{ github.event.comment.body }}
+    steps:
+      - name: Add or take off the spec-ok label, and re-run the spec-review check
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          changed=false
+          # one verdict per line; a review name outside the two is ignored
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            if [[ "$line" =~ ^[[:space:]]*Spec\ review:\ (OK|withdrawn)\ \((sniffer|scope)\)[[:space:]]*$ ]]; then
+              label="spec-ok: ${BASH_REMATCH[2]}"
+              if [ "${BASH_REMATCH[1]}" = OK ]; then
+                gh api -X POST "repos/$repo/issues/$PR/labels" -f "labels[]=$label" --silent
+                echo "Added \"$label\"."
+              else
+                # a label that isn't there answers 404, which is fine
+                gh api -X DELETE "repos/$repo/issues/$PR/labels/$(jq -rn --arg l "$label" '$l | @uri')" --silent 2>/dev/null || true
+                echo "Took off \"$label\"."
+              fi
+              changed=true
+            fi
+          done <<<"$BODY"
+          if [ "$changed" != true ]; then
+            echo "No \"Spec review: OK (sniffer|scope)\" or \"withdrawn\" line; nothing to do."
+            exit 0
+          fi
+          # re-run the newest spec-review run on the head once it has finished (best effort; the next push or label
+          # event re-checks it anyway); one still running may have read the labels before this change, so wait for it
+          head="$(gh api "repos/$repo/pulls/$PR" --jq .head.sha)" || head=""
+          for try in $(seq 20); do
+            [ -n "$head" ] || break
+            newest="$(gh api "repos/$repo/actions/workflows/spec-review.yml/runs?head_sha=$head&per_page=20" \
+              --jq '.workflow_runs | sort_by(.id) | last // empty | "\(.id) \(.status)"')" || newest=""
+            read -r run state <<<"$newest" || true
+            [ -n "${run:-}" ] || break
+            if [ "$state" = completed ] && gh api -X POST "repos/$repo/actions/runs/$run/rerun" --silent; then
+              echo "Re-ran spec-review run $run."
+              exit 0
+            fi
+            sleep "${SPEC_REVIEW_PAUSE:-10}"
+          done
+          echo "::warning::No finished spec-review run on ${head:-the head} to re-run; the next event on the PR re-checks it."

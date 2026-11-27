@@ -9,16 +9,23 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
 
-# No secrets and no token: it reads only the event's own labels.
-permissions: {}
+# No secrets. A read-only token reads the pull request's labels as they are now, not as the event saw them: a re-run
+# (spec-review-comments.yml starts one after it adds a label) keeps its first event's payload.
+permissions:
+  pull-requests: read
 
 jobs:
   spec-review:
     runs-on: ubuntu-latest
     steps:
       - name: Both spec reviews said OK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
+          # the labels now; the event's own if they can't be read
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.labels[].name' 2>/dev/null)" ||
+            labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
           has() { grep -qxF "$1" <<<"$labels"; }
           if has "spec-review: not needed"; then
             echo "No spec review needed (CI, tooling or release process only)."
