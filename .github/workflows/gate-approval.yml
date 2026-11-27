@@ -11,6 +11,10 @@ name: gate-approval
 # can't reach this job's token. It reads the pull request through the API and posts a commit status rather than a
 # check, so a check of the same name from a branch's own workflow can't pass the rule alone (both must pass). The pull
 # request that adds this file gets no run, since its base has none.
+# The run's name ties it to its pull request: the script dates a push by this pull request's own first run for the
+# head, never another pull request's run for the same commit. Main's copy sets it, so a pull request can't.
+run-name: "gate-approval #${{ github.event.pull_request.number }}"
+
 on:
   pull_request_target:
     # edited: a new base branch changes the pull request's files

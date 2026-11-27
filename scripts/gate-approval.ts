@@ -2,10 +2,10 @@
 // pull requests are checked or merged (anything under .github/ or .claude/, this script, the checklist script, the
 // CLA and the licence) needs a maintainer's approval: the `gate-approved` label, added after the pull request's last
 // push. The reviewer's `ai-gate-approved` label may stand in for it, except on a change only a maintainer may approve
-// (human-only below): a workflow line about permissions, write access, secrets or the pull_request_target and
-// workflow_run triggers, this check's own files, or a diff GitHub doesn't show. Every other pull request passes at once.
+// (human-only below): a workflow line about permissions, write access, secrets, the job's token or the
+// pull_request_target, workflow_run and issue_comment triggers, this check's own files, or a diff GitHub doesn't show. Every other pull request passes at once.
 //
-// A push is dated by this workflow's own first run for the new head, which a branch can't change; a label added before
+// A push is dated by this workflow's first run for the new head on this pull request, which a branch can't change; a label added before
 // it is stale. Only people with triage rights or more can label, so the labels are their word.
 
 const GATE_DIRS = [".github/", ".claude/"];
@@ -13,7 +13,8 @@ const GATE_FILES = new Set(["scripts/gate-approval.ts", "scripts/pr-checklist.ts
 /** this check's own files: only a maintainer may approve a change to them */
 const SELF = new Set([".github/workflows/gate-approval.yml", "scripts/gate-approval.ts"]);
 /** a changed workflow line that only a maintainer may approve */
-const RISKY_LINE = /\bpermissions\b|:\s*(read|write|none)\s*(#.*)?$|\b(read|write)-all\b|\bsecrets\b|pull_request_target|workflow_run/;
+const RISKY_LINE =
+  /\bpermissions\b|:\s*["']?(read|write|none)["']?\s*(#.*)?$|\b(read|write)-all\b|\bsecrets\b|github\.token|GITHUB_TOKEN|id-token|persist-credentials|pull_request_target|workflow_run|issue_comment/;
 
 export type ChangedFile = { filename: string; previous_filename?: string; patch?: string };
 export type LabelEvent = { event: string; created_at: string; label?: { name: string }; actor?: { login: string } };
@@ -53,7 +54,7 @@ export function decide(files: ChangedFile[], labels: string[], events: LabelEven
   const allowed = why ? ["gate-approved"] : ["gate-approved", "ai-gate-approved"];
   for (const label of allowed) {
     const e = addedAt(label, labels, events);
-    if (e && e.created_at > pushedAt) return { ok: true, description: `${label} by ${e.actor?.login ?? "?"} after the last push.` };
+    if (e && Date.parse(e.created_at) > Date.parse(pushedAt)) return { ok: true, description: `${label} by ${e.actor?.login ?? "?"} after the last push.` };
   }
   return {
     ok: false,
@@ -101,10 +102,18 @@ export async function main(): Promise<void> {
     const files = await all(`repos/${repo}/pulls/${pr}/files`);
     if (files.length >= 3000) throw new Error("GitHub lists at most 3000 files");
     const events = await all(`repos/${repo}/issues/${pr}/timeline`);
-    const runs = (await api(`repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&head_sha=${head}&per_page=100`))
-      .workflow_runs as { created_at: string }[];
+    // only this pull request's runs (named by the workflow's run-name): another pull request may have shown the same
+    // commit earlier, and its run would date this push too early
+    const runs: { created_at: string; display_title: string }[] = [];
+    for (let page = 1; ; page++) {
+      const batch = (await api(`repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&head_sha=${head}&per_page=100&page=${page}`))
+        .workflow_runs as typeof runs;
+      runs.push(...batch);
+      if (batch.length < 100) break;
+    }
+    const ours = runs.filter((r) => r.display_title === `gate-approval #${pr}`).map((r) => r.created_at);
     // this run is one of them, so there is always a first
-    const pushedAt = runs.map((r) => r.created_at).sort()[0] ?? new Date().toISOString();
+    const pushedAt = ours.sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? new Date().toISOString();
     const v = decide(files, pull.labels.map((l: { name: string }) => l.name), events, pushedAt);
     console.log(`Head ${head} first seen at ${pushedAt}.`);
     await status(head, v.ok ? "success" : "failure", v.description);

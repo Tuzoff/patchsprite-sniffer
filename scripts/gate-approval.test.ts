@@ -19,6 +19,7 @@ test("a gate change needs a label added after the last push", () => {
   assert.equal(decide(f, ["gate-approved"], [labeled("gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true);
   assert.equal(decide(f, ["ai-gate-approved"], [labeled("ai-gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true, "the reviewer may stand in");
   assert.equal(decide(f, [], [labeled("gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, false, "a label taken off again");
+  assert.equal(decide(f, ["gate-approved"], [labeled("gate-approved", "2026-11-27T18:00:00Z")], "2026-11-27T18:00:00.500Z").ok, false, "times, not strings");
 });
 
 test("the gate files: .github, .claude, the check scripts, the CLA and the licence, renames included", () => {
@@ -30,7 +31,7 @@ test("the gate files: .github, .claude, the check scripts, the CLA and the licen
 });
 
 test("only a maintainer may approve permissions, secrets, triggers, this check and unseen diffs", () => {
-  for (const line of ["+permissions:", "+  contents: write", "-  pull-requests: read", "+  pull_request_target:", "+  workflow_run:", "+  X: ${{ secrets.T }}", "+permissions: write-all"]) {
+  for (const line of ["+permissions:", "+  contents: write", "-  pull-requests: read", "+  pull_request_target:", "+  workflow_run:", "+  X: ${{ secrets.T }}", "+permissions: write-all", "+  id-token: 'write'", "+  contents: \"write\"", "+on: [workflow_run]", "+  issue_comment:", "+        secrets: inherit", "+      GH_TOKEN: ${{ github.token }}", "+      persist-credentials: true"]) {
     assert.notEqual(humanOnly([wf(`@@ -1 +1 @@\n${line}`)]), "", line);
   }
   assert.notEqual(humanOnly([{ filename: ".github/workflows/gate-approval.yml", patch: "@@\n+# a comment" }]), "");
