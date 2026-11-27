@@ -102,6 +102,8 @@ export interface InputDeps {
   coveredTimeoutMs?: number;
   /** Wait between those tries, in ms (default 1 s). */
   retryMs?: number;
+  /** Wait before a key or typed text that follows other input, so a dialog that input opened shows first (default 600 ms). */
+  dialogSettleMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -126,7 +128,13 @@ export function toScreen(rect: Rect, scale: number, x: number, y: number): { x: 
 export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
   const scale = d.scale ?? 0.5;
   const sleep = d.sleep ?? wait;
+  let afterInput = false;
   for (const [n, step] of steps.entries()) {
+    // A click or key may open a dialog, which takes a moment to show. Keys sent before then would queue up and land in
+    // it unchecked, so they wait for it to appear and be seen by the dialog check.
+    if (afterInput && (step.op === "key" || step.op === "type")) await sleep(d.dialogSettleMs ?? 600);
+    // A wait step gives the dialog its time; a wheel step neither opens one nor gives it time.
+    if (step.op !== "wheel") afterInput = step.op !== "wait";
     if (step.op === "wait") {
       await sleep(step.seconds * 1000);
       continue;
@@ -191,12 +199,23 @@ async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number,
     }
     throw new InputError(`step ${n + 1} (${step.op}) refused: a file dialog is open. Use fill_dialog for its file name and its Open or Save button; editor_input may only scroll, press Esc or click Cancel there`);
   }
-  if (step.op === "key" && codes.includes(KEYS.alt) && !d.hazardApproved) {
-    const hazard = dialogs.flatMap((x) => x.buttons).find((b) => HAZARD.test(b));
-    if (hazard) {
-      throw new InputError(`step ${n + 1} (key:${step.combo}) refused: an Alt shortcut can press the dialog's "${hazard}" button, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
-    }
+  if (d.hazardApproved || (step.op !== "key" && step.op !== "type")) return;
+  const hazard = dialogs.flatMap((x) => x.buttons).find((b) => HAZARD.test(b));
+  if (!hazard) return;
+  // A dialog's mnemonic presses its button on Alt plus the letter, and on the bare letter too whenever the focus isn't
+  // in a text box; typed text is only safe inside one.
+  const mnemonic = step.op === "key" && (codes.includes(KEYS.alt) || (!codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit)));
+  const typedOutsideBox = step.op === "type" && !(await focusedInTextBox(d.host, win.pid));
+  if (mnemonic || typedOutsideBox) {
+    throw new InputError(`step ${n + 1} (${step.op === "key" ? `key:${step.combo}` : "type"}) refused: it can press the dialog's "${hazard}" button through its shortcut letter, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
   }
+}
+
+const isLetterOrDigit = (vk: number) => (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5a);
+
+async function focusedInTextBox(host: WindowHost, pid: number): Promise<boolean> {
+  const at = await host.focused(pid);
+  return at.found && (at.element.controlType === "Edit" || at.element.controlType === "Document") && at.element.readOnly !== true;
 }
 
 async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, enter: boolean, n: number) {
