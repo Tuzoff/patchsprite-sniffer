@@ -9,7 +9,7 @@ import { Recorder } from "../src/recorder.ts";
 import { registerWalkTools } from "../src/walk/tools.ts";
 import { FakeDevice } from "./fake-frida.ts";
 
-const SKILL = readFileSync(new URL("../../../skills/map-a-device/SKILL.md", import.meta.url), "utf8");
+const SKILL = readFileSync(new URL("../../../skills/map-a-device/SKILL.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("the skill folder has frontmatter with its name and a description", () => {
   const fm = /^---\n([\s\S]*?)\n---\n/.exec(SKILL)?.[1] ?? "";

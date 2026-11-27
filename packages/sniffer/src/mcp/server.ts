@@ -24,7 +24,8 @@ Call help("session") for the order of a session, help("steps") for step labels, 
  * clients that load skills and for help("walk"). */
 export function walkGuide(): string {
   const md = readFileSync(new URL("../../../../skills/map-a-device/SKILL.md", import.meta.url), "utf8");
-  return md.replace(/^---\n[\s\S]*?\n---\n+/, "").trim();
+  // A Windows checkout may turn the line ends into CRLF.
+  return md.replace(/\r\n/g, "\n").replace(/^---\n[\s\S]*?\n---\n+/, "").trim();
 }
 
 const HELP: Record<string, string> = {
