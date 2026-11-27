@@ -4,6 +4,7 @@
 // most once a minute, and never by a timer: a capture left alone lets the device go. If it went idle, the next use
 // takes it again, unless someone else has it by then.
 
+import type { MidiRecord } from "@patchsprite/engine/capture";
 import { acquirePedalLock, describePedalLock, releasePedalLock, touchPedalLock, type PedalLock } from "@patchsprite/engine/pedal-lock";
 
 /** How often a working session renews its hold. */
@@ -18,6 +19,11 @@ export class DeviceHold {
   private renewedAt: number;
   /** The holder that took the device after this hold went idle, until it is had again. */
   private lostTo?: PedalLock;
+  /** While lost: the refusal to give, and when the device was last tried, so it is tried again at most once a minute. */
+  private refusal?: string;
+  private triedAt = 0;
+  /** Messages the editor has sent so far: a repeat is its own polling, not the user at work. */
+  private readonly sent = new Set<string>();
   private readonly now: () => number;
 
   /** Takes the lock; refuses, in words, when someone else holds it. Throws if the lock file can't be handled. */
@@ -42,6 +48,7 @@ export class DeviceHold {
    */
   use(force = false): string | undefined {
     if (!force && this.lock && this.now() - this.renewedAt < RENEW_EVERY_MS) return undefined;
+    if (!force && !this.lock && this.refusal && this.now() - this.triedAt < RENEW_EVERY_MS) return this.refusal;
     try {
       if (this.lock && touchPedalLock(this.lock, this.env)) {
         this.renewedAt = this.now();
@@ -54,16 +61,28 @@ export class DeviceHold {
       if (got.ok) {
         this.lock = got.lock;
         this.renewedAt = this.now();
-        this.lostTo = undefined;
+        this.lostTo = this.refusal = undefined;
         if (had) this.note("info", "the device's lock had gone idle; it is held again");
         return undefined;
       }
       if (!this.lostTo || this.lostTo.pid !== got.holder.pid) this.note("warning", `the device's lock went idle and ${describePedalLock(got.holder)} has it now`.slice(0, 1024));
       this.lostTo = got.holder;
-      return `The device is in use: ${describePedalLock(got.holder)}. The capture left it alone for a while, so it went to them. Wait for it to finish, then go on.`;
+      this.triedAt = this.now();
+      this.refusal = `The device is in use: ${describePedalLock(got.holder)}. The capture left it alone for a while, so it went to them. Wait for it to finish, then go on.`;
+      return this.refusal;
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * A message the capture saw: the editor sending something it hasn't sent before (the user changing something) is the
+   * session at work, and renews the hold. Its own polls repeating, clock, active sensing and the device's answers don't.
+   */
+  heard(r: MidiRecord): void {
+    if (r.dir !== "out" || r.bytes === "f8" || r.bytes === "fe" || this.sent.has(r.bytes)) return;
+    if (this.sent.size < 4096) this.sent.add(r.bytes);
+    this.use();
   }
 
   /** Gives the lock back, if this hold still has it. */

@@ -103,7 +103,7 @@ export class Recorder {
         if (r.type === "midi") {
           counts[r.dir]++;
           if (r.flags) counts.flagged++;
-          else hold.use(); // the editor changing something is the session at work
+          hold.heard(r);
         } else if (r.type === "event" && (r.kind === "attached" || r.kind === "detached")) counts.attached = r.kind === "attached";
         else if (r.type === "stepStart") counts.steps++;
         if (r.type === "stepEnd") writer!.sync();

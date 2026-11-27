@@ -106,14 +106,10 @@ if (cmd === "mcp") {
       hold.release();
     } catch {} // a lock left behind is stale once this process is gone
   });
-  // The hold is renewed when the editor sends something it hasn't sent before (the user changing something), never
-  // by its own polls repeating: a capture left alone lets the device go after 15 minutes.
-  const sent = new Set<string>();
+  // the hold is renewed while the user changes things in the editor, never by its own polls (DeviceHold.heard)
   const write = (r: CaptureRecord) => {
     writer!.write(r);
-    if (r.type !== "midi" || r.dir !== "out" || r.bytes === "f8" || r.bytes === "fe" || sent.has(r.bytes)) return;
-    if (sent.size < 4096) sent.add(r.bytes);
-    hold.use();
+    if (r.type === "midi") hold.heard(r);
   };
   const path = out ?? defaultCaptureName(header!);
   try {
