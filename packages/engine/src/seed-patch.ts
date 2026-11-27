@@ -659,6 +659,88 @@ function writesPin(segs: readonly string[], pins: Set<string>, above: Set<string
   return above.has(own.join(SEP));
 }
 
+const LIFT_BLOCK = "may lift a block";
+
+/**
+ * A send or request kept apart from a blocked message on a cmd they can share, and what keeps them apart ("byte 4: 08
+ * vs 01", "length: 1 vs 2 or more"): the app's `blockSeparations(protocol)`. A firmware is named only for a pair that
+ * is new there or rests on something else.
+ */
+export interface BlockSeparation {
+  firmware?: string;
+  send: string;
+  blocked: string;
+  by: string;
+}
+
+export interface ReviewOptions {
+  /**
+   * The app's block separations of a map (its `blockSeparations`, which loads the map). With it, a change that may
+   * lift a block says which pair it touches and how their separation changes across the patch. It may throw when a
+   * map doesn't load; the reason then stays the plain one.
+   */
+  separations?: (map: unknown) => readonly BlockSeparation[];
+}
+
+/** At most this many separation notes per change; the rest are counted. */
+const MAX_SEPARATION_NOTES = 8;
+
+/** The messages an op at `segs` touches by name: a message, or every message whose payload names a layout it touches. */
+function touchedMessages(segs: readonly string[], maps: readonly Json[]): Set<string> {
+  const own = segs[0] === "firmwares" ? segs.slice(2) : segs;
+  const out = new Set<string>();
+  const all = (key: "messages") =>
+    maps.flatMap((m) => {
+      const firmwares = at(m, ["firmwares"]);
+      return [at(m, [key]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, [key])) : [])].filter(isObject);
+    });
+  if (own[0] === "messages") {
+    if (own.length >= 2) out.add(own[1]);
+    else for (const t of all("messages")) for (const n of Object.keys(t)) out.add(n);
+  } else if (own[0] === "layouts")
+    for (const t of all("messages"))
+      for (const [n, m] of Object.entries(t)) if (isObject(m) && typeof m.payload === "string" && (own.length < 2 || m.payload === own[1])) out.add(n);
+  return out;
+}
+
+/**
+ * The separations before and after the whole patch, as notes for the messages a change touches: a pair that is new
+ * means the patch puts a send beside a blocked message, a changed `by` means a separation moved, a pair that is gone
+ * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
+ * them apart. Null when either map's separations can't be had.
+ */
+function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): ((names: Set<string>) => string[]) | undefined {
+  let before: readonly BlockSeparation[];
+  let after: readonly BlockSeparation[];
+  try {
+    before = separations(base);
+    after = separations(patched);
+  } catch {
+    return undefined;
+  }
+  const key = (s: BlockSeparation) => [s.firmware ?? "", s.send, s.blocked].join(SEP);
+  const was = new Map(before.map((s) => [key(s), s]));
+  const now = new Map(after.map((s) => [key(s), s]));
+  const on = (s: BlockSeparation) => (s.firmware ? ` on ${s.firmware}` : "");
+  return (names) => {
+    const notes: string[] = [];
+    for (const k of new Set([...was.keys(), ...now.keys()])) {
+      const a = was.get(k);
+      const b = now.get(k);
+      const s = (b ?? a)!;
+      if (!names.has(s.send) && !names.has(s.blocked)) continue;
+      notes.push(
+        !a ? `${s.send} now shares a cmd with the blocked ${s.blocked}${on(s)}, kept apart only by ${s.by}`
+        : !b ? `${s.send} is no longer kept apart from the blocked ${s.blocked}${on(s)} (was ${s.by})`
+        : a.by !== b.by ? `what keeps ${s.send} apart from the blocked ${s.blocked}${on(s)} moves from ${a.by} to ${b.by}`
+        : `${s.send} is kept apart from the blocked ${s.blocked}${on(s)} by ${s.by}`,
+      );
+    }
+    if (notes.length <= MAX_SEPARATION_NOTES) return notes;
+    return [...notes.slice(0, MAX_SEPARATION_NOTES), `and ${notes.length - MAX_SEPARATION_NOTES} more pairs`];
+  };
+}
+
 /** Keys anywhere inside a value. */
 function keysIn(v: unknown, out = new Set<string>()): Set<string> {
   if (Array.isArray(v)) for (const x of v) keysIn(x, out);
@@ -686,12 +768,14 @@ const makesSend = (v: unknown, last: string | undefined): boolean => (last === "
 const isMeasured = (v: unknown): boolean =>
   isObject(v) && typeof v.value === "number" && Object.keys(v).every((k) => ["value", "unit", "measuredOn", "date", "source"].includes(k));
 
-export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
+export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions = {}): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
+  const patched = applySeedPatch(base, p).map;
   // the pins as the base map has them and as the whole patch leaves them, so a change that brings a send onto a
   // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place, whatever subset is accepted
-  const pins = blockPins([base as Json, applySeedPatch(base, p).map as Json]);
+  const pins = blockPins([base as Json, patched as Json]);
   const above = abovePins(pins);
+  const separated = opts.separations ? separationNotes(opts.separations, base, patched) : undefined;
   for (const c of p.changes) {
     const reasons = new Set<string>();
     const measured = parseEntry(c.entry)?.kind === "measured";
@@ -708,7 +792,11 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const keys = new Set([...segs, ...put, ...keysIn(old), ...keysIn(covered)]);
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
-      if (writesPin(segs, pins, above)) reasons.add("may lift a block: changes what tells a blocked message from a send on its cmd");
+      if (writesPin(segs, pins, above)) {
+        const notes = separated?.(touchedMessages(segs, [base as Json, patched as Json]));
+        if (notes?.length) for (const n of notes) reasons.add(`${LIFT_BLOCK}: ${n}`);
+        else reasons.add(`${LIFT_BLOCK}: changes what tells a blocked message from a send on its cmd`);
+      }
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");

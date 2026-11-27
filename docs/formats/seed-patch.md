@@ -279,7 +279,11 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
   counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
   a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
-  whose payload another change edits;
+  whose payload another change edits. Given the app's block separations (`reviewReasons(patch, map, { separations })`,
+  the app's `blockSeparations`, which loads the map), the reason names each pair the change touches and how its
+  separation changes from the base map to the map the whole patch leaves: a send that now shares a blocked cmd
+  ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that still holds. Without
+  them, or when a map doesn't load, the reason is the plain one;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together. A parameter's `default` isn't on this list: the map checks it at load against
   those limits, and it only says where a reset lands;

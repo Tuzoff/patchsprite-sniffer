@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { schemaFiles } from "../../../scripts/schemas.ts";
 import { fingerprint } from "../src/canonical-json.ts";
-import { MAX_PATCH_BYTES, UNKNOWN_FIRMWARE, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
+import { MAX_PATCH_BYTES, UNKNOWN_FIRMWARE, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type BlockSeparation, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
 
 const fixture = (name: string) => readFileSync(new URL(`../../../test/fixtures/seed-patch/${name}`, import.meta.url), "utf8");
 const seed = () => JSON.parse(fixture("acme-fx-1.seed.json"));
@@ -622,4 +622,48 @@ test("a slot pedal's parameters are keyed by effect type: param/<type>/<id> find
   // a parameter's default is checked at load against its limits; changing it is no write-limit change
   const reset: Change = { id: "r", entry: "param/fuzz/1", action: "repair", source: "wire", ops: [{ op: "replace", path: "/parameters/groups/drives/params/sustain/default", value: 40, was: fingerprint(50) }], evidence: [capture] };
   assert.deepEqual(reviewReasons(patch(map, reset), map), []);
+});
+
+test("with the app's block separations, a change that may lift a block names the pair and what keeps them apart", () => {
+  const pin = (v: number) => ({ fields: [{ name: "magic", type: "u8", const: v }] });
+  const base = seed();
+  Object.assign(base.messages, { factoryReset: { cmd: "7f", dir: "send", payload: pin(1) }, storeScene: { cmd: "7f", dir: "send", payload: "scene" } });
+  base.layouts = { scene: { size: 2, fields: [{ name: "magic", type: "u8", const: 2 }, { name: "slot", type: "u8" }] } };
+  base.blocked = ["factoryReset"];
+  // a stand-in for the app's blockSeparations: sends on a blocked cmd, told apart by their first byte's const
+  const first = (m: any, map: any) => {
+    const l = typeof m.payload === "string" ? map.layouts[m.payload] : m.payload;
+    const c = l?.fields?.[0]?.const;
+    return c === undefined ? "any" : c.toString(16).padStart(2, "0");
+  };
+  const separations = (map: any): BlockSeparation[] =>
+    (map.blocked ?? []).flatMap((b: string) =>
+      Object.entries(map.messages)
+        .filter(([n, m]: [string, any]) => n !== b && m.dir === "send" && m.cmd === map.messages[b].cmd)
+        .map(([n, m]) => ({ send: n, blocked: b, by: `byte 0: ${first(m, map)} vs ${first(map.messages[b], map)}` })),
+    );
+  const edit = (entry: string, ...ops: NonNullable<Change["ops"]>): Change => ({ id: "c", entry, action: "repair", source: "wire", ops, evidence: [capture] });
+  const reasons = (c: Change, sep: (m: unknown) => readonly BlockSeparation[] = separations) =>
+    reviewReasons(withChanges(c), base, { separations: sep }).map((r) => r.reason);
+
+  assert.deepEqual(reasons(edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 3, was: fingerprint(2) })), [
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset moves from byte 0: 02 vs 01 to byte 0: 03 vs 01",
+  ]);
+  assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "7f", was: fingerprint("22") })), [
+    "may lift a block: setBypass now shares a cmd with the blocked factoryReset, kept apart only by byte 0: any vs 01",
+  ]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "replace", path: "/messages/storeScene/cmd", value: "7e", was: fingerprint("7f") })), [
+    "may lift a block: storeScene is no longer kept apart from the blocked factoryReset (was byte 0: 02 vs 01)",
+  ]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "add", path: "/messages/storeScene/agentNotes", value: "x" })), ["changes text a chat model reads"], "no pin, no note");
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 })), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+  ]);
+  // a map the app can't load: the plain reason
+  const fails = () => {
+    throw new Error("does not load");
+  };
+  assert.deepEqual(reasons(edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 3, was: fingerprint(2) }), fails), [
+    "may lift a block: changes what tells a blocked message from a send on its cmd",
+  ]);
 });
