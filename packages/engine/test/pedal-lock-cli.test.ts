@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -194,6 +194,34 @@ function parentProcess(): { child: ChildProcess; exited: Promise<unknown> } {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
   return { child, exited: new Promise((r) => child.on("exit", r)) };
 }
+
+test("a hold unused for 15 minutes ends on its own and frees the device; touch keeps it, and only its owner can", async () => {
+  const env = home();
+  const walk = await hold(env);
+  assert.ok(walk.held, walk.err);
+  try {
+    const ago = (ms: number) => {
+      const t = new Date(Date.now() - ms);
+      utimesSync(lockFile(env), t, t);
+    };
+    ago(14 * 60_000);
+    const touched = await node(env, LOCK, "touch", "--owner", "editor walk");
+    assert.equal(touched.code, 0, touched.err);
+    assert.equal(touched.out, "held");
+    assert.ok(Date.now() - statSync(lockFile(env)).mtimeMs < 60_000, "touch marks it used now");
+    assert.equal((await node(env, LOCK, "touch", "--owner", "someone else")).code, 3);
+    assert.equal(await state(env), "held");
+    // waiting on a person: nothing uses it for 16 minutes
+    ago(16 * 60_000);
+    assert.equal(await walk.exited, 0, "the hold ends on its own");
+  } finally {
+    walk.child.kill();
+    await walk.exited;
+  }
+  assert.equal(existsSync(lockFile(env)), false, "and removes its idle lock");
+  assert.equal(await state(env), "free");
+  assert.equal((await node(env, LOCK, "touch")).code, 3, "nothing to touch once it is free");
+});
 
 test("hold --parent releases the lock within a second of its parent ending", async () => {
   const env = home();

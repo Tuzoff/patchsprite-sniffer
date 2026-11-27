@@ -5,11 +5,11 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { dataHome } from "@patchsprite/engine/data-dir";
-import { acquirePedalLock, describePedalLock, releasePedalLock, type PedalLock } from "@patchsprite/engine/pedal-lock";
 import type { CaptureRecord, EndRecord } from "@patchsprite/engine/capture";
 import { CaptureSession, type FridaDevice } from "./capture-session.ts";
 import { CaptureWriter } from "./capture-writer.ts";
 import { captureHeader, defaultCaptureName } from "./header.ts";
+import { DeviceHold } from "./hold.ts";
 import { judgeSelfTest, type SelfTestResult } from "./self-test.ts";
 import { Steps, type StepResult } from "./steps.ts";
 
@@ -38,7 +38,7 @@ export class Recorder {
   private live?: {
     writer: CaptureWriter;
     steps: Steps;
-    lock: PedalLock;
+    hold: DeviceHold;
     stop: AbortController;
     running: Promise<void>;
     counts: Counts;
@@ -85,8 +85,12 @@ export class Recorder {
     const env = this.o.env ?? process.env;
     const header = captureHeader({ editorExe: o.editorExe, note: o.note });
     const device = await this.o.getDevice();
-    const got = acquirePedalLock("sniffer capture", { env });
-    if (!got.ok) throw new Error(`The device is in use: ${describePedalLock(got.holder)}. Wait for it to finish, then start again.`);
+    // the hold's own notes (gone idle, taken again) go into the capture once it runs
+    const hold = DeviceHold.take(env, (kind, text) => {
+      try {
+        this.live?.steps.record({ type: "event", t: Date.now(), kind, text });
+      } catch {} // a note the file can't take is not worth failing over
+    });
     let writer: CaptureWriter | undefined;
     try {
       const dir = capturesDir(env);
@@ -99,6 +103,7 @@ export class Recorder {
         if (r.type === "midi") {
           counts[r.dir]++;
           if (r.flags) counts.flagged++;
+          else hold.use(); // the editor changing something is the session at work
         } else if (r.type === "event" && (r.kind === "attached" || r.kind === "detached")) counts.attached = r.kind === "attached";
         else if (r.type === "stepStart") counts.steps++;
         if (r.type === "stepEnd") writer!.sync();
@@ -106,7 +111,7 @@ export class Recorder {
       const steps = new Steps({ write, rules: o.channelMessages ? { shortMax: 0 } : {}, settleMs: this.o.settleMs, maxMs: this.o.maxMs, pollMs: this.o.pollMs });
       const stop = new AbortController();
       const session = new CaptureSession({ device, editorExe: o.editorExe, attachDelayMs: o.attachDelayS * 1000, write: steps.record });
-      const live = { writer, steps, lock: got.lock, stop, running: Promise.resolve(), counts, file, editor: o.editorExe, failed: undefined as string | undefined };
+      const live = { writer, steps, hold, stop, running: Promise.resolve(), counts, file, editor: o.editorExe, failed: undefined as string | undefined };
       // a capture that fails (Frida lost, the hook refused) is noted in the file; stop then ends it as an error
       live.running = session.run(stop.signal).catch((e: unknown) => {
         live.failed = `The capture stopped: ${(e as Error).message}`.slice(0, 1024);
@@ -118,7 +123,7 @@ export class Recorder {
       return file;
     } catch (e) {
       writer?.close();
-      releasePedalLock(got.lock, env);
+      hold.release();
       throw e;
     }
   }
@@ -128,13 +133,25 @@ export class Recorder {
     return this.live;
   }
 
+  /**
+   * The session is about to work the device (a step, the walk's next input): keeps its hold in use, or takes it again
+   * if it went idle. Throws, in words, when someone else has the device by then. At most once a minute unless `now`
+   * (a hold renewed within the minute can't have gone idle).
+   */
+  use(now = false): void {
+    const busy = this.need().hold.use(now);
+    if (busy) throw new Error(busy);
+  }
+
   begin(kind: "action" | "manual" | "selfTest", label: string, mode?: string): number {
+    this.use(true);
     return this.need().steps.begin(kind, label, { mode });
   }
 
   async end(extra: { label?: string; note?: string; aborted?: boolean } = {}): Promise<StepResult & { selfTest?: SelfTestResult }> {
     const live = this.need();
     const kind = live.steps.openKind;
+    live.hold.use();
     const r = await this.waiting(live, live.steps.end(extra));
     if (kind !== "selfTest" || extra.aborted) return r;
     const selfTest = judgeSelfTest(r.messages);
@@ -143,6 +160,7 @@ export class Recorder {
   }
 
   async idle(seconds: number): Promise<string[]> {
+    this.use(true);
     const live = this.need();
     return this.waiting(live, live.steps.idle(seconds * 1000));
   }
@@ -166,7 +184,7 @@ export class Recorder {
       live.writer.write({ type: "end", t: Date.now(), reason, ...(text ? { text: text.slice(0, 1024) } : {}) });
     } finally {
       live.writer.close();
-      releasePedalLock(live.lock, this.o.env ?? process.env);
+      live.hold.release();
     }
     return live.file;
   }

@@ -1,7 +1,7 @@
 // The sniffer's MCP server, end to end through an MCP client, on a fake Frida device and a temp data folder.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { parseCapture } from "@patchsprite/engine/capture";
-import { acquirePedalLock, pedalLockPath, releasePedalLock } from "@patchsprite/engine/pedal-lock";
+import { acquirePedalLock, PEDAL_LOCK_IDLE_MS, pedalLockPath, readPedalLock, releasePedalLock } from "@patchsprite/engine/pedal-lock";
 import { createServer, INSTRUCTIONS } from "../src/mcp/server.ts";
 import { CaptureWriter } from "../src/capture-writer.ts";
 import { Recorder } from "../src/recorder.ts";
@@ -151,6 +151,32 @@ test("stop_capture while a step is still ending waits for it, so the step closes
   const types = c.capture.records.map((r) => r.type);
   assert.deepEqual(types.slice(-2), ["stepEnd", "end"]);
   assert.equal(c.capture.end?.reason, "stopped");
+});
+
+test("a capture left alone lets the device go: a step then takes it again, or is refused while someone else has it", async () => {
+  const { env, device, call } = await rig();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const { data } = await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0 });
+  const idle = () => {
+    const then = new Date(Date.now() - PEDAL_LOCK_IDLE_MS - 60_000);
+    utimesSync(pedalLockPath(env), then, then);
+  };
+  idle(); // nobody touched it for 16 minutes
+  const other = acquirePedalLock("hardware check", { env });
+  assert.ok(other.ok);
+  const refused = await call("begin_step", { label: "Drive: off → on" });
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /^The device is in use: hardware check \(process \d+\)/);
+  releasePedalLock(other.lock, env);
+  assert.equal((await call("begin_step", { label: "Drive: off → on" })).error, false);
+  assert.equal(readPedalLock(env)?.owner, "sniffer capture", "taken again");
+  await call("end_step", { aborted: true });
+  await call("stop_capture");
+  assert.equal(readPedalLock(env), undefined, "and given back at the end");
+  const c = parseCapture(readFileSync(data!.file as string, "utf8"));
+  assert.ok(c.ok);
+  const notes = c.capture.records.flatMap((r) => (r.type === "event" && (r.kind === "warning" || r.kind === "info") ? [r.text] : []));
+  assert.ok(notes.some((n) => /^the device's lock went idle and hardware check/.test(n ?? "")), notes.join("; "));
 });
 
 test("someone else holding the device: start_capture refuses and creates nothing", async () => {

@@ -47,6 +47,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     // The capture holds the pedal lock from start to stop; input needs it still running at the moment it is sent.
     const beforeInput = async () => {
       if (!recorder.active) throw new Error("The capture stopped, so the input was not sent.");
+      recorder.use(); // input is the session at work: keeps the device held (throws when someone else has it now)
     };
 
     server.registerTool(
