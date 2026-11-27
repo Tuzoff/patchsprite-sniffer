@@ -74,6 +74,8 @@ export function parseStep(s: string): Step {
       return { op, combo: arg };
     case "type":
       if (!arg) throw new InputError(`"${s}": type needs text`);
+      // A typed line break or tab can press a button or move the focus onto one; use key:enter or key:tab for those.
+      if (/[\r\n\t]/.test(arg)) throw new InputError(`"${s}": type takes one line of text; use key:enter or key:tab between steps`);
       return { op, text: arg };
     case "wait": {
       const [seconds] = nums(1);
@@ -139,7 +141,11 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
         if (step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, { op: step.op, x: step.x1, y: step.y1 }, n);
         // Enter, space, delete and backspace act on whatever control has the focus, so they are checked like a click on it.
-        if (step.op === "key" && PRESS_KEYS.some((k) => keyCodes(step.combo).includes(k))) await refuseFocusedHazard(d.host, win.pid, step.combo, n);
+        if (step.op === "key" && PRESS_KEYS.some((k) => keyCodes(step.combo).includes(k))) {
+          await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, keyCodes(step.combo).includes(KEYS.enter), n);
+        }
+        // A typed space presses a focused button too.
+        if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
       }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
@@ -153,13 +159,20 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
 }
 
 function refuseIfHazard(at: ElementResult, what: string) {
-  if (at.found && HAZARD.test(at.element.name)) {
-    throw new InputError(`${what} "${at.element.name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+  if (at.found) refuseIfHazardName(at.element.name, what);
+}
+
+function refuseIfHazardName(name: string, what: string) {
+  if (HAZARD.test(name)) {
+    throw new InputError(`${what} "${name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
   }
 }
 
-async function refuseFocusedHazard(host: WindowHost, pid: number, combo: string, n: number) {
-  refuseIfHazard(await host.focused(pid), `step ${n + 1} (key:${combo}) refused: the focused control is`);
+async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, enter: boolean, n: number) {
+  const at = await host.focused(pid);
+  refuseIfHazard(at, `step ${n + 1} (${what}) refused: the focused control is`);
+  // Enter in a dialog presses its default button, whichever control has the focus.
+  if (enter && at.defaultButton) refuseIfHazardName(at.defaultButton, `step ${n + 1} (${what}) refused: Enter would press the dialog's default button`);
 }
 
 async function refuseHazard(host: WindowHost, win: FoundWindow, scale: number, step: { op: string; x: number; y: number }, n: number) {

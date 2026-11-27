@@ -208,6 +208,8 @@ public static class WalkDialog {
   [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, string l);
   [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", EntryPoint = "SendMessageW")] static extern IntPtr SendMessageI(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr d, int id);
 
   public static string Class(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
   public static string Text(IntPtr h) { var s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
@@ -220,6 +222,15 @@ public static class WalkDialog {
       return true;
     }, IntPtr.Zero);
     return out_;
+  }
+
+  // The button Enter presses in a dialog (DM_GETDEFID answers DC_HASDEFID in its high word), or "" when it has none.
+  public static string DefaultButton(IntPtr d) {
+    if (Class(d) != "#32770") return "";
+    long r = SendMessageI(d, 0x0400, IntPtr.Zero, IntPtr.Zero).ToInt64();
+    if (((r >> 16) & 0xFFFF) != 0x534B) return "";
+    var b = GetDlgItem(d, (int)(r & 0xFFFF));
+    return b == IntPtr.Zero ? "" : Text(b).Replace("&", "");
   }
 
   public static List<IntPtr> Children(IntPtr d) {
@@ -365,9 +376,12 @@ function Invoke-Op($req) {
       return @{ found = $true; element = (Element-Json $e) }
     }
     'focused' {
+      # Enter in a dialog presses its default button wherever the focus is, so that button's caption comes too.
+      $fg = [WalkWin]::GetForegroundWindow(); $fpid = [uint32]0; [void][WalkWin]::GetWindowThreadProcessId($fg, [ref]$fpid)
+      $def = if ($fpid -eq [uint32]$req.pid) { [WalkDialog]::DefaultButton($fg) } else { '' }
       $e = [Windows.Automation.AutomationElement]::FocusedElement
-      if (-not $e -or $e.Current.ProcessId -ne [int]$req.pid) { return @{ found = $false } }
-      return @{ found = $true; element = (Element-Json $e) }
+      if (-not $e -or $e.Current.ProcessId -ne [int]$req.pid) { return @{ found = $false; defaultButton = $def } }
+      return @{ found = $true; element = (Element-Json $e); defaultButton = $def }
     }
     'dialogs' { return @{ dialogs = @([WalkDialog]::Dialogs([uint32]$req.pid) | ForEach-Object { Dialog-Json $_ }) } }
     'fill' {

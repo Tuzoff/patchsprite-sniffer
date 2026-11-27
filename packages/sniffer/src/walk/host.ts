@@ -37,6 +37,9 @@ export type InputResult = { done: true } | { done: false; owner: string };
 /** A UI Automation lookup: the element, when it is the editor's. */
 export type ElementResult = { found: false } | { found: true; element: UiElement };
 
+/** The focused control, plus the caption of the default button (the one Enter presses) of the dialog in front, if any. */
+export type FocusedResult = ElementResult & { defaultButton?: string };
+
 export interface UiElement {
   name: string;
   controlType: string;
@@ -77,7 +80,7 @@ export interface WindowHost {
   /** The UI Automation element at a point, when it is the editor's. */
   element(pid: number, x: number, y: number): Promise<ElementResult>;
   /** The UI Automation element that has the keyboard focus, when it is the editor's. */
-  focused(pid: number): Promise<ElementResult>;
+  focused(pid: number): Promise<FocusedResult>;
   /** The editor's standard Windows file and folder dialogs. */
   dialogs(pid: number): Promise<{ dialogs: DialogInfo[] }>;
   /** Types a path into a dialog's edit box and presses the button with that caption. */
@@ -177,7 +180,7 @@ export class PowerShellHost implements WindowHost {
   }
 
   async focused(pid: number) {
-    return (await this.#call("focused", { pid })) as unknown as ElementResult;
+    return (await this.#call("focused", { pid })) as unknown as FocusedResult;
   }
 
   async dialogs(pid: number) {

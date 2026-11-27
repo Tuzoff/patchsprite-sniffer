@@ -67,6 +67,9 @@ export function checkDialogPath(root: string, path: string, save = false): strin
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new InputError(`a dialog may only be pointed inside the capture's folder (${resolve(root)}), so nothing else on the computer can be opened or overwritten`);
   }
+  // Below the folder, a tilde can name a file by its short 8.3 name ("UPDATE~1.FIR"), whose extension isn't the
+  // file's own. (The folder itself may well be a short name, such as a temp folder under RUNNER~1.)
+  if (rel.includes("~")) throw new InputError("a dialog path may not hold ~ below the capture's folder: a short 8.3 name can hide a file's extension");
   // Windows drops a name's trailing dots and spaces ("update.bin." opens update.bin) and reads "name:stream" as a
   // stream of that file, so neither can hide an extension.
   if (full.split(/[\\/]/).some((seg) => /[. ]$/.test(seg)) || full.replace(/^[a-z]:/i, "").includes(":")) {

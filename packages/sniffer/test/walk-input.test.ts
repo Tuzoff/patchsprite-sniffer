@@ -146,6 +146,21 @@ test("enter, space, delete and backspace on a focused hazard control are refused
   await runSteps({ host: ok.host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("key:enter")]);
 });
 
+test("enter is refused when the dialog in front would press a hazard default button, and typed spaces or line breaks are checked", async () => {
+  const gain = { found: true as const, element: { name: "Gain", controlType: "Edit", automationId: "", className: "", enabled: true, rect: RECT } };
+  const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
+  const dlg = inputHost(0, { focused: async () => ({ ...gain, defaultButton: "Update Firmware" }) });
+  await assert.rejects(run(dlg.host, ["key:enter"]), /default button "Update Firmware"/);
+  await run(dlg.host, ["key:space", "key:tab"]);
+  await run(dlg.host, ["key:enter"], true);
+  assert.equal(dlg.log.filter((l) => l.startsWith("keys")).length, 3, "space and tab press the focused control, not the default button");
+  const btn = inputHost(0, { focused: async () => ({ found: true as const, element: { ...gain.element, name: "Delete", controlType: "Button" } }) });
+  await assert.rejects(run(btn.host, ["type:a b"]), /focused control is "Delete"/);
+  await run(btn.host, ["type:ab"]);
+  assert.throws(() => parseStep("type:a\nb"), /one line of text/);
+  assert.throws(() => parseStep("type:a\tb"), /one line of text/);
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);
@@ -223,4 +238,5 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
   await assert.rejects(fillDialog(d, "Save As", join(root, "x.bin"), "Save"), /\.bin file/);
   assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
   assert.equal(checkDialogPath(root, root), root, "a folder picker may be pointed at the folder itself");
+  assert.throws(() => checkDialogPath(root, join(root, "UPDATE~1.FIR")), /short 8\.3 name/);
 });
