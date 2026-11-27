@@ -145,13 +145,13 @@ test("the file-dialog helper lists the editor's dialogs and fills one after the 
   const calls: string[] = [];
   const host = fakeWindowHost({
     find: async () => WIN,
-    dialogs: async () => ({ dialogs: [{ title: "Save As", edits: ["File name:"], buttons: ["Save", "Cancel"] }] }),
+    dialogs: async () => ({ dialogs: [{ title: "Save As", fileBox: true, buttons: ["Save", "Cancel"] }] }),
     fill: async (pid, title, path, button) => {
       calls.push(`fill ${pid} ${title} ${path} ${button}`);
       return { done: true, remaining: [] };
     },
   });
-  assert.deepEqual(await listDialogs({ host, app: "Editor.exe" }), [{ title: "Save As", edits: ["File name:"], buttons: ["Save", "Cancel"] }]);
+  assert.deepEqual(await listDialogs({ host, app: "Editor.exe" }), [{ title: "Save As", fileBox: true, buttons: ["Save", "Cancel"] }]);
   let locked = false;
   const root = join(tmpdir(), "walk-capture");
   const remaining = await fillDialog({ host, app: "Editor.exe", allowedRoot: root, beforeInput: async () => void (locked = true) }, "Save As", join(root, "backup.prst"), "Save");
@@ -163,7 +163,7 @@ test("the file-dialog helper lists the editor's dialogs and fills one after the 
 test("a dialog fill that can't find its dialog or button says what is open", async () => {
   const host = fakeWindowHost({
     find: async () => WIN,
-    dialogs: async () => ({ dialogs: [{ title: "Open", edits: [], buttons: [] }] }),
+    dialogs: async () => ({ dialogs: [{ title: "Open", fileBox: false, buttons: [] }] }),
     fill: async () => ({ done: false, why: "0 dialogs titled 'Save As'" }),
   });
   const root = join(tmpdir(), "walk-capture");

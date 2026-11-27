@@ -183,6 +183,71 @@ public static class WalkInput {
   }
 }
 '@
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+// The editor's standard file dialogs through their Win32 controls: the file-name box and buttons are plain Edit and
+// Button windows, reachable even when UI Automation doesn't expose them or the dialog sits partly off screen.
+public static class WalkDialog {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, string l);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+
+  public static string Class(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
+  public static string Text(IntPtr h) { var s = new StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
+
+  public static List<IntPtr> Dialogs(uint pid) {
+    var out_ = new List<IntPtr>();
+    EnumWindows((h, l) => {
+      uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && IsWindowVisible(h) && Class(h) == "#32770") out_.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return out_;
+  }
+
+  public static List<IntPtr> Children(IntPtr d) {
+    var out_ = new List<IntPtr>();
+    EnumChildWindows(d, (h, l) => { out_.Add(h); return true; }, IntPtr.Zero);
+    return out_;
+  }
+
+  // The file-name box: the Edit with the common dialogs' id (1001, or 1152 in a folder picker), else the Edit inside
+  // the file-name combo box. Never another edit (the search box, the address bar).
+  public static IntPtr FileBox(IntPtr d) {
+    IntPtr combo = IntPtr.Zero;
+    foreach (var c in Children(d)) {
+      if (Class(c) != "Edit") continue;
+      int id = GetDlgCtrlID(c);
+      if (id == 1001 || id == 1152) return c;
+      var p = GetParent(c);
+      if (combo == IntPtr.Zero && Class(p) == "ComboBox" && Class(GetParent(p)) == "ComboBoxEx32") combo = c;
+    }
+    return combo;
+  }
+
+  public static List<IntPtr> Buttons(IntPtr d) {
+    var out_ = new List<IntPtr>();
+    foreach (var c in Children(d)) if (Class(c) == "Button" && IsWindowVisible(c) && Text(c).Length > 0) out_.Add(c);
+    return out_;
+  }
+
+  public static void SetText(IntPtr h, string text) { SendMessage(h, 0x000C, IntPtr.Zero, text); } // WM_SETTEXT
+  // Posted, not sent: a press can open a modal confirmation, which would block a sent message until it closes.
+  public static void Press(IntPtr h) { PostMessage(h, 0x00F5, IntPtr.Zero, IntPtr.Zero); } // BM_CLICK
+}
+'@
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase  # WindowsBase holds System.Windows.Point
 
 function Find-Editor([string]$exe) {
@@ -225,24 +290,9 @@ function Element-Json($e) {
   return $out
 }
 
-# The editor's standard Windows dialogs (Open, Save, Select Folder): top-level #32770 windows of its process.
-function Get-Dialogs([uint32]$editorPid) {
-  $cond = New-Object Windows.Automation.AndCondition(
-    (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$editorPid)),
-    (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, '#32770')))
-  $found = @([Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $cond))
-  foreach ($w in @([Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,
-      (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$editorPid))))) {
-    $found += @($w.FindAll([Windows.Automation.TreeScope]::Children,
-      (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, '#32770'))))
-  }
-  return $found
-}
-
-function Dialog-Controls($d, $type) {
-  @($d.FindAll([Windows.Automation.TreeScope]::Descendants,
-    (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, $type))) |
-    Where-Object { $_.Current.IsEnabled })  # not IsOffscreen: on a small screen a dialog's bottom row can be off it
+function Dialog-Json([IntPtr]$d) {
+  @{ title = [WalkDialog]::Text($d); fileBox = ([WalkDialog]::FileBox($d) -ne [IntPtr]::Zero)
+     buttons = @([WalkDialog]::Buttons($d) | ForEach-Object { [WalkDialog]::Text($_) -replace '&', '' }) }
 }
 
 function Invoke-Op($req) {
@@ -308,30 +358,19 @@ function Invoke-Op($req) {
       if (-not $e -or $e.Current.ProcessId -ne [int]$req.pid) { return @{ found = $false } }
       return @{ found = $true; element = (Element-Json $e) }
     }
-    'dialogs' {
-      $list = foreach ($d in Get-Dialogs ([uint32]$req.pid)) {
-        @{ title = $d.Current.Name
-           edits = @(Dialog-Controls $d ([Windows.Automation.ControlType]::Edit) | ForEach-Object { $_.Current.Name })
-           buttons = @(Dialog-Controls $d ([Windows.Automation.ControlType]::Button) | ForEach-Object { $_.Current.Name }) }
-      }
-      return @{ dialogs = @($list) }
-    }
+    'dialogs' { return @{ dialogs = @([WalkDialog]::Dialogs([uint32]$req.pid) | ForEach-Object { Dialog-Json $_ }) } }
     'fill' {
-      $d = @(Get-Dialogs ([uint32]$req.pid) | Where-Object { $_.Current.Name -eq $req.title })
+      $d = @([WalkDialog]::Dialogs([uint32]$req.pid) | Where-Object { [WalkDialog]::Text($_) -eq $req.title })
       if ($d.Count -ne 1) { return @{ done = $false; why = "$($d.Count) dialogs titled '$($req.title)'" } }
-      # The common dialogs' file-name box (automation id 1001; 1152 in a folder picker), else one labelled like it.
-      # Never any other edit box: a file list's column headers and the search box are edits too.
-      $edits = @(Dialog-Controls $d[0] ([Windows.Automation.ControlType]::Edit))
-      $edit = @($edits | Where-Object { $_.Current.AutomationId -in '1001', '1152' }) +
-              @($edits | Where-Object { $_.Current.Name -like 'File name*' -or $_.Current.Name -like 'Folder*' })
-      if ($edit.Count -eq 0) { return @{ done = $false; why = 'the dialog has no file-name box' } }
-      $edit[0].GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue([string]$req.path)
-      Start-Sleep -Milliseconds 300
-      $btn = @(Dialog-Controls $d[0] ([Windows.Automation.ControlType]::Button) | Where-Object { ($_.Current.Name -replace '&', '') -eq $req.button })
+      $box = [WalkDialog]::FileBox($d[0])
+      if ($box -eq [IntPtr]::Zero) { return @{ done = $false; why = 'the dialog has no file-name box' } }
+      $btn = @([WalkDialog]::Buttons($d[0]) | Where-Object { ([WalkDialog]::Text($_) -replace '&', '') -eq $req.button })
       if ($btn.Count -ne 1) { return @{ done = $false; why = "$($btn.Count) buttons named '$($req.button)'" } }
-      $btn[0].GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+      [WalkDialog]::SetText($box, [string]$req.path)
+      Start-Sleep -Milliseconds 300
+      [WalkDialog]::Press($btn[0])
       Start-Sleep -Milliseconds 1000
-      return @{ done = $true; remaining = @(Get-Dialogs ([uint32]$req.pid) | ForEach-Object { $_.Current.Name }) }
+      return @{ done = $true; remaining = @([WalkDialog]::Dialogs([uint32]$req.pid) | ForEach-Object { [WalkDialog]::Text($_) }) }
     }
     default { throw "unknown op $($req.op)" }
   }

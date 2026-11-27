@@ -50,7 +50,8 @@ export interface UiElement {
 
 export interface DialogInfo {
   title: string;
-  edits: string[];
+  /** Whether it has a file-name box a fill can type into. */
+  fileBox: boolean;
   buttons: string[];
 }
 

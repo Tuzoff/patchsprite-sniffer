@@ -120,7 +120,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     server.registerTool(
       "list_dialogs",
       {
-        description: "The editor's open Windows file and folder dialogs (Open, Save As, Select Folder), with their edit boxes and buttons. Those dialogs don't show in editor_screenshot, so check here when the editor seems stuck after a click.",
+        description: "The editor's open Windows file and folder dialogs (Open, Save As, Select Folder), with their buttons and whether each has a file-name box. Those dialogs don't show in editor_screenshot, so check here when the editor seems stuck after a click.",
         annotations: ro,
       },
       async () => {

@@ -33,7 +33,7 @@ async function rig() {
     click: async (pid, x, y) => (log.push(`click ${pid} ${x},${y}`), { done: true }),
     type: async (pid, t) => (log.push(`type ${pid} ${t}`), { done: true }),
     element: async () => ({ found: true, element: { name: "Level", controlType: "Edit", automationId: "", className: "", enabled: true, rect: { left: 100, top: 100, width: 50, height: 20 }, value: "-6.0" } }),
-    dialogs: async () => ({ dialogs: [{ title: "Save As", edits: ["File name:"], buttons: ["Save", "Cancel"] }] }),
+    dialogs: async () => ({ dialogs: [{ title: "Save As", fileBox: true, buttons: ["Save", "Cancel"] }] }),
     fill: async (pid, title, path, button) => (log.push(`fill ${title} ${path} ${button}`), { done: true, remaining: [] }),
   });
   const register = walkTools({ makeHost: (root) => (roots.push(root), host), sleep: async () => {} });
