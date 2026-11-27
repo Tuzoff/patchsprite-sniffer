@@ -56,7 +56,7 @@ test("the built package exports what an app imports from it, by its own name", a
     "MapCheckRecordSchema", "MapCheckStateSchema", "observeCodecUse", "ENGINE_VERSION",
   ]) assert.ok(name in main, `main exports ${name}`);
   const node = await import("@patchsprite/engine/node");
-  for (const name of ["writeFileAtomic", "loadDeviceMapIn", "modelMapsIn", "acquirePedalLock", "setPedalLockHome", "openMidiTransport", "dataHome"]) {
+  for (const name of ["writeFileAtomic", "loadDeviceMapIn", "modelMapsIn", "openMidiTransport"]) {
     assert.ok(name in node, `node exports ${name}`);
   }
   assert.equal(main.ENGINE_VERSION, pkg.version);

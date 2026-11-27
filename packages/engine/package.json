@@ -1,7 +1,7 @@
 {
   "name": "@patchsprite/engine",
   "version": "0.1.0",
-  "description": "Device maps for MIDI and SysEx devices: the map schema, a generic codec and framing engines (browser-safe), with map loading, the pedal lock and an RtMidi transport for Node.",
+  "description": "Device maps for MIDI and SysEx devices: the map schema, a generic codec and framing engines (browser-safe), with map loading and an RtMidi transport for Node.",
   "type": "module",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -31,12 +31,8 @@
     },
     "./package.json": "./package.json"
   },
-  "bin": {
-    "patchsprite-pedal-lock": "./bin/pedal-lock.mjs"
-  },
   "files": [
     "dist",
-    "bin",
     "vectors"
   ],
   "sideEffects": false,

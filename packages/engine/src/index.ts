@@ -1,5 +1,5 @@
 // @patchsprite/engine: device maps and their codec, with no Node API, so it runs in Node and in a browser alike.
-// Node-only code (files, map loading from folders, the pedal lock, the RtMidi transport) is in "@patchsprite/engine/node".
+// Node-only code (atomic files, map loading from folders, the RtMidi transport) is in "@patchsprite/engine/node".
 
 export * from "./canonical-json.ts";
 export * from "./cmd-overlap.ts";
