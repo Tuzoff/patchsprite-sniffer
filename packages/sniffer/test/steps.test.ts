@@ -110,3 +110,25 @@ test("the idle recording flags all its traffic as the poll set, and later steps 
   const r = await s.end();
   assert.equal(r.counted, 1, "the poll answer doesn't count; the change does");
 });
+
+test("a step ends once: a second end while it waits is refused, and so is ending or beginning during the idle recording", async () => {
+  const { s, out } = steps();
+  s.begin("action", "Drive: off → on");
+  const first = s.end();
+  await assert.rejects(s.end(), /already ending/);
+  assert.throws(() => s.begin("action", "x: 1 → 2"), /still ending/);
+  await first;
+  assert.equal(out.filter((x) => x.type === "stepEnd").length, 1);
+  const idle = s.idle(40);
+  await assert.rejects(s.end(), /idle recording ends on its own/);
+  assert.throws(() => s.begin("action", "x: 1 → 2"), /idle recording is still running/);
+  await idle;
+  assert.equal(s.begin("action", "x: 1 → 2"), 3);
+});
+
+test("an answer seen once keeps its maker id and command, so another command's answer of the same length still counts", () => {
+  const set = pollSetFrom([midi("f0 00 20 33 51 12 f7", "in")]);
+  assert.deepEqual(set, ["f0 00 20 33 51 .. f7"]);
+  assert.deepEqual(quietFlags(midi("f0 00 20 33 22 05 f7", "in"), { polls: set }), []);
+  assert.deepEqual(quietFlags(midi("f0 00 20 33 51 40 f7", "in"), { polls: set }), ["poll"]);
+});
