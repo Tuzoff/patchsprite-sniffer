@@ -240,6 +240,10 @@ async function focusedInTextBox(host: WindowHost, pid: number): Promise<boolean>
 async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, enter: boolean, n: number) {
   const at = await host.focused(pid);
   refuseIfHazard(at, `step ${n + 1} (${what}) refused: the focused control is`);
+  // A menu item drawn by the editor itself often has no name, so what Enter would pick is unknown.
+  if (enter && at.found && at.element.controlType === "MenuItem" && !at.element.name.trim()) {
+    throw new InputError(`step ${n + 1} (${what}) refused: the focused menu item has no name, so what it does is unknown. Take a screenshot and ask the user; only with their say-so, repeat it with hazardApproved.`);
+  }
   // Enter in a dialog presses its default button, whichever control has the focus.
   if (enter && at.dialogHung) throw new InputError(`step ${n + 1} (${what}) refused: the dialog in front isn't answering, so what Enter would press is unknown. Take a screenshot and try again`);
   if (enter && at.defaultButton) refuseIfHazardName(at.defaultButton, `step ${n + 1} (${what}) refused: Enter would press the dialog's default button`);

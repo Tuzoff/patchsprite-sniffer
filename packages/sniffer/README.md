@@ -51,7 +51,8 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
   of the editor's dialogs shows a hazard button, a shortcut letter (with or without Alt) is refused, and so is typed
   text outside a text box. A key or typed text that follows other input in the same call waits 600 ms first, so a
   dialog that input opened is seen before anything is typed into it. In an open menu, shortcut letters and typed text are
-  refused (a letter picks an item unseen); arrows and Enter, which check the focused item, or a click do the same.
+  refused (a letter picks an item unseen); arrows and Enter, which check the focused item's name
+  (an unnamed item is refused), or a click do the same.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which

@@ -227,6 +227,9 @@ test("in an open menu, shortcut letters and typed text are refused; arrows, Ente
   const firmware = inputHost(0, { focused: item("Firmware Update...") });
   await assert.rejects(run(firmware.host, ["key:enter"]), /focused control is "Firmware Update/);
   await run(firmware.host, ["key:u"], true);
+  const unnamed = inputHost(0, { focused: item("") });
+  await assert.rejects(run(unnamed.host, ["key:enter"]), /menu item has no name/);
+  await run(unnamed.host, ["key:enter"], true);
 });
 
 test("no editor window: input is refused", async () => {
