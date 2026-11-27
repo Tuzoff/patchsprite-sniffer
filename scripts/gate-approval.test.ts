@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decide, gateFiles, humanOnly, type ChangedFile, type LabelEvent } from "./gate-approval.ts";
+import { decide, gateFiles, humanOnly, pushedAt, type ChangedFile, type LabelEvent } from "./gate-approval.ts";
 
 const PUSH = "2026-11-27T18:00:00Z";
-const labeled = (name: string, at: string): LabelEvent => ({ event: "labeled", created_at: at, label: { name }, actor: { login: "maintainer" } });
+const labeled = (name: string, at: string): LabelEvent => ({ event: "labeled", created_at: at, label: { name }, actor: { login: "Tuzoff" } });
 const doc: ChangedFile = { filename: "packages/sniffer/src/walk.ts", patch: "@@ -1 +1 @@\n-a\n+b" };
 const wf = (patch: string): ChangedFile => ({ filename: ".github/workflows/test.yml", patch });
 
@@ -42,4 +42,26 @@ test("only a maintainer may approve permissions, secrets, triggers, this check a
   const f = [wf("@@ -1 +1 @@\n+permissions: {}")];
   assert.equal(decide(f, ["ai-gate-approved"], [labeled("ai-gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, false);
   assert.equal(decide(f, ["gate-approved"], [labeled("gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true);
+});
+
+test("a push is dated by the current head's unbroken streak of runs, so A, B, A again dates A from its return", () => {
+  const run = (head_sha: string, created_at: string) => ({ head_sha, created_at });
+  const runs = [run("A", "2026-11-27T10:00:00Z"), run("A", "2026-11-27T10:05:00Z"), run("B", "2026-11-27T11:00:00Z"), run("A", "2026-11-27T12:00:00Z"), run("A", "2026-11-27T12:01:00Z")];
+  assert.equal(pushedAt(runs, "A", []), "2026-11-27T12:00:00Z");
+  assert.equal(pushedAt(runs.slice(0, 3), "B", []), "2026-11-27T11:00:00Z");
+  const f = [{ filename: ".github/workflows/test.yml", patch: "@@\n+  node-version: 22" }];
+  // labelled on A's first visit, then B, then A again: the old label is stale
+  assert.equal(decide(f, ["gate-approved"], [{ event: "labeled", created_at: "2026-11-27T10:10:00Z", label: { name: "gate-approved" }, actor: { login: "Tuzoff" } }], pushedAt(runs, "A", [])).ok, false);
+});
+
+test("a new base branch counts as a push", () => {
+  const runs = [{ head_sha: "A", created_at: "2026-11-27T10:00:00Z" }];
+  assert.equal(pushedAt(runs, "A", [{ event: "base_ref_changed", created_at: "2026-11-27T11:00:00Z" }]), "2026-11-27T11:00:00Z");
+});
+
+test("only an approver's label counts", () => {
+  const f = [{ filename: ".github/workflows/test.yml", patch: "@@\n+  node-version: 22" }];
+  const by = (login: string): LabelEvent => ({ event: "labeled", created_at: "2026-11-27T18:00:01Z", label: { name: "gate-approved" }, actor: { login } });
+  assert.equal(decide(f, ["gate-approved"], [by("someone-else")], PUSH).ok, false);
+  assert.equal(decide(f, ["gate-approved"], [by("Tuzoff")], PUSH).ok, true);
 });

@@ -38,6 +38,26 @@ export function humanOnly(gate: ChangedFile[]): string {
   return "";
 }
 
+/** who may approve: the maintainer's login, which the reviewer thread also posts under (labels need triage rights) */
+const APPROVERS = new Set(["Tuzoff"]);
+
+/**
+ * When the head was pushed: the first of this pull request's runs in the unbroken streak on the current head, newest
+ * first (so pushing A, then B, then A again dates A from its last push, not its first), or a later change of base
+ * branch, which changes the files as a push does. runs: this pull request's runs of this workflow, any order.
+ */
+export function pushedAt(runs: { created_at: string; head_sha: string }[], head: string, events: LabelEvent[]): string {
+  const newest = [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  let start: string | undefined;
+  for (const r of newest) {
+    if (r.head_sha !== head) break;
+    start = r.created_at;
+  }
+  // this run is one of them, so there is always a start; without one, nothing earlier than now counts
+  const times = [start ?? new Date().toISOString(), ...events.filter((e) => e.event === "base_ref_changed").map((e) => e.created_at)];
+  return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+}
+
 /** when the label was last added, if it is on the pull request now */
 function addedAt(label: string, labels: string[], events: LabelEvent[]): LabelEvent | undefined {
   if (!labels.includes(label)) return undefined;
@@ -48,13 +68,14 @@ export type Verdict = { ok: boolean; description: string };
 
 /** the verdict, given the changed files, the labels now, the label events and when this head was first seen */
 export function decide(files: ChangedFile[], labels: string[], events: LabelEvent[], pushedAt: string): Verdict {
+  // labelled after the push, by an approver
   const gate = gateFiles(files);
   if (gate.length === 0) return { ok: true, description: "No gate files changed." };
   const why = humanOnly(gate);
   const allowed = why ? ["gate-approved"] : ["gate-approved", "ai-gate-approved"];
   for (const label of allowed) {
     const e = addedAt(label, labels, events);
-    if (e && Date.parse(e.created_at) > Date.parse(pushedAt)) return { ok: true, description: `${label} by ${e.actor?.login ?? "?"} after the last push.` };
+    if (e && APPROVERS.has(e.actor?.login ?? "") && Date.parse(e.created_at) > Date.parse(pushedAt)) return { ok: true, description: `${label} by ${e.actor?.login ?? "?"} after the last push.` };
   }
   return {
     ok: false,
@@ -98,24 +119,25 @@ export async function main(): Promise<void> {
   // a newer head than this run's event has its own run, which decides
   if (head !== env("HEAD_SHA")) return console.log(`The pull request moved on to ${head}; its own run decides.`);
   await status(head, "pending", "Checking for gate changes and approval.");
+  // a status belongs to a commit, not a pull request: one into another branch with the same head could post success
+  if (pull.base.ref !== "main") return status(head, "failure", "Only pull requests into main are checked here.");
   try {
     const files = await all(`repos/${repo}/pulls/${pr}/files`);
     if (files.length >= 3000) throw new Error("GitHub lists at most 3000 files");
     const events = await all(`repos/${repo}/issues/${pr}/timeline`);
-    // only this pull request's runs (named by the workflow's run-name): another pull request may have shown the same
-    // commit earlier, and its run would date this push too early
-    const runs: { created_at: string; display_title: string }[] = [];
+    // only this pull request's runs (named by the workflow's run-name), every head it has had: another pull request
+    // may have shown the same commit, and an earlier visit of this head would date this push too early
+    const runs: { created_at: string; head_sha: string; display_title: string }[] = [];
+    const branch = encodeURIComponent(pull.head.ref);
     for (let page = 1; ; page++) {
-      const batch = (await api(`repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&head_sha=${head}&per_page=100&page=${page}`))
+      const batch = (await api(`repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&branch=${branch}&per_page=100&page=${page}`))
         .workflow_runs as typeof runs;
       runs.push(...batch);
       if (batch.length < 100) break;
     }
-    const ours = runs.filter((r) => r.display_title === `gate-approval #${pr}`).map((r) => r.created_at);
-    // this run is one of them, so there is always a first
-    const pushedAt = ours.sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? new Date().toISOString();
-    const v = decide(files, pull.labels.map((l: { name: string }) => l.name), events, pushedAt);
-    console.log(`Head ${head} first seen at ${pushedAt}.`);
+    const pushed = pushedAt(runs.filter((r) => r.display_title === `gate-approval #${pr}`), head, events);
+    const v = decide(files, pull.labels.map((l: { name: string }) => l.name), events, pushed);
+    console.log(`Head ${head} pushed at ${pushed}.`);
     await status(head, v.ok ? "success" : "failure", v.description);
   } catch (e) {
     await status(head, "failure", "The check could not read the pull request; re-run it.");
