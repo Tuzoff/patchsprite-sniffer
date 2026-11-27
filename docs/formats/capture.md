@@ -63,7 +63,7 @@ Every record has a `type` and a time `t`.
 | `bytes` | yes | the message |
 | `hookT` | no | the time the hook saw it, when that differs from `t` |
 | `port` | no | the MIDI handle the editor used, as the hook saw it, so two ports in one session are told apart |
-| `flags` | no | why the message doesn't count as a step's traffic: `clock` (F8), `activeSensing` (FE), `short`, `poll` (the editor's own constant polling) |
+| `flags` | no | why the message doesn't count as a step's traffic: `clock` (F8), `activeSensing` (FE), `short` (a channel message on a SysEx device, whose editor sends stray ones; never set for a device driven by channel messages, whose CC, PC and NRPN messages are its traffic), `poll` (the editor's own constant polling) |
 
 Nothing is ever dropped. Flagged messages stay in the capture; a step is over once nothing unflagged has arrived for
 a while, so a device that streams MIDI clock no longer keeps every step waiting. A message with no flags counts.
