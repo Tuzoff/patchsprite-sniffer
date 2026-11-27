@@ -11,10 +11,18 @@
 //                                              of process PID ending (refused, exit 2, if PID isn't running)
 //   pedal-lock stop [--owner NAME]             releases a live lock held under NAME, which ends its hold; exit 3 if
 //                                              someone else holds the pedal
+//   pedal-lock touch [--owner NAME]            marks the live lock held under NAME as in use now; exit 3 if it isn't
+//                                              held under NAME
+//
+// Idle timeout: nothing holds the device while waiting on a person. A lock unused for 15 minutes is stale
+// (src/pedal-lock.ts), and a hold then ends on its own. run keeps it in use while its command runs (a scripted walk:
+// never wrap a command that waits on a person); a hold is kept in use by its holder each time that uses the device, or
+// by touch as each step of a walk starts.
 //
 // When someone else holds a live lock, run and hold take nothing, print who holds it and exit with code 3; when the
 // lock file can't be handled at all, every command prints why and exits with code 4 (run passes its command's own
-// code through, 3 and 4 included: tell them apart by stderr). The lock is released when the command ends, on errors
+// code through, 3 and 4 included: tell them apart by stderr; and run stops its command and exits 4 if the lock goes
+// idle or is taken over while it runs, say after the machine slept). The lock is released when the command ends, on errors
 // and on Ctrl+C; a process killed outright leaves a lock that is stale at once, since its process is gone (but a
 // reused pid can keep it alive, so end a hold with stop, not a kill). NAME defaults to "editor walk". stop knows a
 // hold only by NAME: run it only after your own hold printed "held".
@@ -29,12 +37,15 @@ import { randomBytes } from "node:crypto";
 import {
   acquirePedalLock,
   describePedalLock,
+  keepPedalLockInUse,
+  OWNER_MAX,
   PEDAL_LOCK_TOKEN_ENV,
   processAlive,
   readPedalLock,
   releasePedalLock,
   samePedalLock,
   stopPedalLock,
+  touchPedalLock,
   type PedalLock,
 } from "../src/pedal-lock.ts";
 
@@ -44,7 +55,7 @@ const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"];
 const [cmd, ...rest] = process.argv.slice(2);
 
 const USAGE =
-  "usage: pedal-lock status | run [--owner NAME] -- CMD [ARGS...] | hold [--owner NAME] [--parent PID] [--print-token] | stop [--owner NAME]";
+  "usage: pedal-lock status | run [--owner NAME] -- CMD [ARGS...] | hold [--owner NAME] [--parent PID] [--print-token] | stop [--owner NAME] | touch [--owner NAME]";
 
 function help() {
   console.log(USAGE);
@@ -90,7 +101,7 @@ if (cmd === "status") {
   process.exit(0);
 }
 if (cmd === "help" || cmd === "--help") help();
-if (cmd !== "run" && cmd !== "hold" && cmd !== "stop") usage();
+if (cmd !== "run" && cmd !== "hold" && cmd !== "stop" && cmd !== "touch") usage();
 
 // options, up to "--" (run) or the end
 let owner = "editor walk";
@@ -119,7 +130,18 @@ if (cmd !== "run" && args.length) usage();
 // the holder's token (see the header), for run and hold
 const secret = process.env[PEDAL_LOCK_TOKEN_ENV] || randomBytes(32).toString("hex");
 
-if (cmd === "stop") {
+if (cmd === "touch") {
+  const lock = orFail(() => readPedalLock());
+  if (!lock || lock.owner !== owner.slice(0, OWNER_MAX)) {
+    console.error(lock ? `Not touched: ${describePedalLock(lock)}, not ${owner}.` : "Not touched: the pedal is free.");
+    process.exit(HELD);
+  }
+  if (!orFail(() => touchPedalLock(lock))) {
+    console.error("Not touched: the lock went idle or was taken over meanwhile.");
+    process.exit(HELD);
+  }
+  console.log("held");
+} else if (cmd === "stop") {
   const stopped = orFail(() => stopPedalLock(owner));
   if (!stopped.ok) {
     console.error(`Not stopped: ${describePedalLock(stopped.holder)}, not ${owner}.`);
@@ -141,14 +163,24 @@ if (cmd === "stop") {
   setInterval(() => {
     if (parent !== undefined && !processAlive(parent)) process.exit(0);
     try {
+      // stopped, taken over, or unused for 15 minutes (the exit handler then removes the idle file)
       if (!samePedalLock(readPedalLock(), mine)) process.exit(0);
     } catch {}
   }, 500);
 } else {
   if (args[0] !== "--" || args.length < 2) usage();
-  take(owner, secret);
+  // a running command is in use (never wrap one that waits on a person): keep the lock from going idle
+  const held = take(owner, secret);
   // the command, and the MCP server it may start, pass the lock with its token
   const child = spawn(args[1], args.slice(2), { stdio: "inherit", env: { ...process.env, [PEDAL_LOCK_TOKEN_ENV]: secret } });
+  // lost (gone idle while the machine slept, say, and maybe taken over): the command must not drive the pedal on
+  // under someone else's lock, so it is stopped and run exits 4
+  let lost = false;
+  keepPedalLockInUse(held, process.env, () => {
+    lost = true;
+    console.error(`The pedal lock went idle or was taken over while ${args[1]} ran; stopping it.`);
+    child.kill();
+  });
   // Ctrl+C, Ctrl+Break and closing the console reach the command too: let it stop and clean up on its own (killing it
   // here would be TerminateProcess on Windows) and keep the lock until it has exited
   for (const sig of STOP_SIGNALS) process.on(sig, () => sig === "SIGTERM" && child.kill());
@@ -158,5 +190,5 @@ if (cmd === "stop") {
     console.error(`Could not start ${args[1]}: ${e.message}`);
     process.exit(1);
   });
-  child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+  child.on("exit", (code, signal) => process.exit(lost ? FAILED : (code ?? (signal ? 1 : 0))));
 }

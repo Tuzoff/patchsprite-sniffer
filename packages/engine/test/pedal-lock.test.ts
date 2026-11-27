@@ -1,9 +1,9 @@
 // The pedal lock module (src/pedal-lock.ts), each test in its own temp PATCHSPRITE_HOME.
 
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -11,6 +11,8 @@ import {
   assertPedalFree,
   describePedalLock,
   foreignPedalLock,
+  keepPedalLockInUse,
+  PEDAL_LOCK_IDLE_MS,
   PEDAL_LOCK_MAX_AGE_MS,
   PEDAL_LOCK_TOKEN_ENV,
   PedalBusyError,
@@ -20,7 +22,9 @@ import {
   processAlive,
   readPedalLock,
   releasePedalLock,
+  renewOwnPedalLock,
   stopPedalLock,
+  touchPedalLock,
 } from "../src/pedal-lock.ts";
 
 const env = () => ({ PATCHSPRITE_HOME: mkdtempSync(join(tmpdir(), "patchsprite-lock-")) });
@@ -239,4 +243,74 @@ test("a start time that parses only with its control characters in still gives t
     () => assertPedalFree(e),
     (err: unknown) => err instanceof PedalBusyError && !/NaN/.test(err.message) && err.holder?.since === new Date(startedAt).toISOString(),
   );
+});
+
+/** Sets the lock file's modification time (its last use) `ms` ago. */
+function idleFor(e: NodeJS.ProcessEnv, ms: number) {
+  const then = new Date(Date.now() - ms);
+  utimesSync(pedalLockPath(e), then, then);
+}
+
+test("a lock unused for 15 minutes is stale and taken over; one used since is not", () => {
+  assert.equal(PEDAL_LOCK_IDLE_MS, 15 * 60 * 1000);
+  const e = env();
+  const first = acquirePedalLock("editor walk", { env: e });
+  assert.ok(first.ok);
+  idleFor(e, PEDAL_LOCK_IDLE_MS - 60_000);
+  assert.deepEqual(readPedalLock(e), first.lock, "used 14 minutes ago: still held");
+  assert.equal(acquirePedalLock("hardware check", { env: e }).ok, false);
+  idleFor(e, PEDAL_LOCK_IDLE_MS + 60_000);
+  assert.equal(readPedalLock(e), undefined, "unused for 16 minutes: free");
+  assert.equal(touchPedalLock(first.lock, e), false, "an idle lock can't be brought back");
+  const second = acquirePedalLock("hardware check", { env: e });
+  assert.ok(second.ok, "and someone else takes it over");
+  assert.equal(releasePedalLock(first.lock, e), false, "the first holder's release leaves the new lock alone");
+});
+
+test("touch keeps the holder's lock in use; it never touches someone else's", () => {
+  const e = env();
+  const got = acquirePedalLock("editor walk", { env: e });
+  assert.ok(got.ok);
+  idleFor(e, PEDAL_LOCK_IDLE_MS - 1000);
+  assert.equal(touchPedalLock(got.lock, e), true);
+  idleFor(e, 0);
+  assert.deepEqual(readPedalLock(e), got.lock);
+  assert.equal(touchPedalLock({ ...got.lock, owner: "someone else" }, e), false);
+});
+
+test("the holder's own processes renew the lock when they use the device; another process doesn't", () => {
+  const e = env();
+  const got = acquirePedalLock("demo run", { env: e, token: "secret-a" });
+  assert.ok(got.ok);
+  const usedAt = () => statSync(pedalLockPath(e)).mtimeMs;
+  idleFor(e, PEDAL_LOCK_IDLE_MS - 60_000);
+  const old = usedAt();
+  renewOwnPedalLock({ ...e, [PEDAL_LOCK_TOKEN_ENV]: "secret-b" });
+  renewOwnPedalLock(e);
+  assert.equal(usedAt(), old, "no token, or another's: not renewed");
+  renewOwnPedalLock({ ...e, [PEDAL_LOCK_TOKEN_ENV]: "secret-a" });
+  assert.ok(usedAt() > old + 30_000, "its holder's token: renewed");
+  assert.deepEqual(readPedalLock(e), got.lock);
+});
+
+test("a running command's lock is touched every minute, and the loss is reported once when it goes idle", () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const e = env();
+    const got = acquirePedalLock("scripted walk", { env: e });
+    assert.ok(got.ok);
+    let lost = 0;
+    const timer = keepPedalLockInUse(got.lock, e, () => lost++);
+    idleFor(e, PEDAL_LOCK_IDLE_MS - 1000);
+    mock.timers.tick(60_000);
+    assert.ok(Date.now() - statSync(pedalLockPath(e)).mtimeMs < 5_000, "touched");
+    assert.equal(lost, 0);
+    idleFor(e, PEDAL_LOCK_IDLE_MS + 1000); // the machine slept
+    mock.timers.tick(60_000);
+    mock.timers.tick(60_000);
+    assert.equal(lost, 1, "reported once, then the timer stops");
+    clearInterval(timer);
+  } finally {
+    mock.timers.reset();
+  }
 });
