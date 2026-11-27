@@ -53,12 +53,14 @@ export class DeviceHold {
     try {
       if (this.lock && touchPedalLock(this.lock, this.env)) {
         this.renewedAt = this.now();
+        this.failedOnce = false;
         return undefined;
       }
       // gone idle (left alone for 15 minutes), maybe taken over since: take it again if it's free
       const had = this.lock !== undefined;
       this.lock = undefined;
       const got = acquirePedalLock(OWNER, { env: this.env });
+      this.failedOnce = false;
       if (got.ok) {
         this.lock = got.lock;
         this.renewedAt = this.now();
@@ -71,9 +73,10 @@ export class DeviceHold {
       this.triedAt = this.now();
       this.refusal = `The device is in use: ${describePedalLock(got.holder)}. The capture left it alone for a while, so it went to them. Wait for it to finish, then go on.`;
       return this.refusal;
-    } catch (e) {
-      // the lock file can't be handled: say so once, since the hold now lapses on its own
-      if (!this.failedOnce) this.note("warning", `could not renew the device's lock: ${(e as Error).message}`.slice(0, 1024));
+    } catch {
+      // the lock file can't be handled: say so once per outage, since the hold now lapses on its own (not the error
+      // itself, which names the data folder's path and so maybe the user's name: a capture holds no paths)
+      if (!this.failedOnce) this.note("warning", "could not renew the device's lock: its file in the data folder can't be handled");
       this.failedOnce = true;
       return undefined;
     }
