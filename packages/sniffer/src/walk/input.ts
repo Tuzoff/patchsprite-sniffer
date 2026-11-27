@@ -137,6 +137,7 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
       await d.beforeInput();
       const win = await editorWindow(d.host, d.app);
       await d.host.front(win.hwnd);
+      await refuseDialogBypass(d, win, scale, step, n);
       if (!d.hazardApproved) {
         // A drag presses and releases like a click, so both its ends are checked too.
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
@@ -165,6 +166,34 @@ function refuseIfHazard(at: ElementResult, what: string) {
 function refuseIfHazardName(name: string, what: string) {
   if (HAZARD.test(name)) {
     throw new InputError(`${what} "${name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+  }
+}
+
+/** Buttons that only close a file dialog, which a click may press while one is open. */
+const CLOSE_BUTTON = /^(cancel|close|no)$/i;
+
+/** While one of the editor's standard file dialogs is open, its file name and its Open or Save button are fill_dialog's
+ * alone, which keeps a file inside the capture's folder and checks its extension: input may only scroll or press
+ * Cancel. And an Alt shortcut presses a dialog's button unseen, so it is refused while any of the editor's dialogs
+ * shows a hazard button. */
+async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number, step: Exclude<Step, { op: "wait" }>, n: number) {
+  const alt = step.op === "key" && keyCodes(step.combo).includes(KEYS.alt);
+  if (step.op === "wheel") return;
+  const { dialogs } = await d.host.dialogs(win.pid);
+  if (!dialogs.length) return;
+  if (dialogs.some((x) => x.fileBox)) {
+    if (step.op === "click") {
+      const p = toScreen(win.rect, scale, step.x, step.y);
+      const at = await d.host.element(win.pid, p.x, p.y);
+      if (at.found && at.element.controlType === "Button" && CLOSE_BUTTON.test(at.element.name.replace(/&/g, "").trim())) return;
+    }
+    throw new InputError(`step ${n + 1} (${step.op}) refused: a file dialog is open. Use fill_dialog for its file name and its Open or Save button; editor_input may only scroll or click Cancel there`);
+  }
+  if (alt && !d.hazardApproved) {
+    const hazard = dialogs.flatMap((x) => x.buttons).find((b) => HAZARD.test(b));
+    if (hazard) {
+      throw new InputError(`step ${n + 1} (key:${step.combo}) refused: an Alt shortcut can press the dialog's "${hazard}" button, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+    }
   }
 }
 

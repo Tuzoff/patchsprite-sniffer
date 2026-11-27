@@ -164,6 +164,30 @@ test("enter is refused when the dialog in front would press a hazard default but
   assert.throws(() => parseStep("type:a\bb"), /one line of text/);
 });
 
+test("while a file dialog is open, input may only scroll or press Cancel; Alt shortcuts are refused beside a hazard button", async () => {
+  const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
+  const button = (name: string) => async () => ({ found: true as const, element: { name, controlType: "Button", automationId: "", className: "", enabled: true, rect: RECT } });
+  const fileDialog = async () => ({ dialogs: [{ title: "Open", fileBox: true, buttons: ["&Open", "Cancel"] }] });
+  for (const step of ["type:C:\\x.syx", "key:enter", "key:alt+o", "dclick:1,1", "drag:1,1,2,2"]) {
+    const { host, log } = inputHost(0, { dialogs: fileDialog, element: button("Open") });
+    await assert.rejects(run(host, [step], true), /a file dialog is open/, step);
+    assert.equal(log.filter((l) => !l.startsWith("front")).length, 0, step);
+  }
+  const open = inputHost(0, { dialogs: fileDialog, element: button("Open") });
+  await assert.rejects(run(open.host, ["click:1,1"]), /a file dialog is open/);
+  const cancel = inputHost(0, { dialogs: fileDialog, element: button("&Cancel") });
+  await run(cancel.host, ["click:1,1", "wheel:1,1,-2"]);
+  assert.equal(cancel.log.filter((l) => !l.startsWith("front")).length, 2, "Cancel and scrolling still work");
+
+  const store = async () => ({ dialogs: [{ title: "Preset", fileBox: false, buttons: ["Store", "Cancel"] }] });
+  const s1 = inputHost(0, { dialogs: store });
+  await assert.rejects(run(s1.host, ["key:alt+s"]), /Alt shortcut can press the dialog's "Store" button/);
+  await run(s1.host, ["key:alt+s"], true);
+  await run(s1.host, ["key:ctrl+z"]);
+  const plain = inputHost(0, { dialogs: async () => ({ dialogs: [{ title: "Preset", fileBox: false, buttons: ["OK", "Cancel"] }] }) });
+  await run(plain.host, ["key:alt+o"]);
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);
