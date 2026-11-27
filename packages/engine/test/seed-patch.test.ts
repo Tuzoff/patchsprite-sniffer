@@ -758,12 +758,20 @@ test("with block separations from the caller, a change that may lift a block nam
     "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
     "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 2: 07 vs 00 to byte 1: 05 vs 00",
   ]);
-  // the caller leaves a firmware's pair in a mode unnamed where the base map in that mode names it: that pair comes first
+  // a firmware that moves a pair, and a mode that moves it in the base map only: unnamed on that firmware in that
+  // mode, the pair holds as the firmware's, not as the base map's in that mode
   const inModeAll = { mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" };
-  const modeFirst = (map: any): BlockSeparation[] => [...separations(map), onFwPair, inModeAll, ...(map === base ? [] : [{ ...inModeAll, firmware: "2.0" }])];
-  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeFirst), [
+  const fwFirst = (map: any): BlockSeparation[] => [...separations(map), onFwPair, inModeAll, ...(map === base ? [] : [{ ...onFwPair, mode: "live" }])];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), fwFirst), [
     "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
     "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live on 2.0 by byte 2: 07 vs 00",
+  ]);
+  // a firmware that doesn't move the pair: unnamed there in a mode, it holds as the base map's in that mode
+  const modeNext = (map: any): BlockSeparation[] => [...separations(map), inModeAll, ...(map === base ? [] : [{ ...inModeAll, firmware: "2.0" }])];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeNext), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
     "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
     "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live on 2.0 by byte 1: 05 vs 00",
   ]);

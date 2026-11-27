@@ -777,8 +777,8 @@ const shown = (s: string, max = 80): string => {
  * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
  * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
  * since an unnamed pair holds on every firmware that doesn't say otherwise; a pair named in a mode likewise with the
- * pair the caller leaves it unnamed for (on a firmware, the base map's in that mode first, then that firmware's, then
- * the base map's). The base map's and the whole patch's separations are asked for once. Undefined when the base map's,
+ * pair the caller leaves it unnamed for (on a firmware, that firmware's pair first, then the base map's in that mode,
+ * then the base map's). The base map's and the whole patch's separations are asked for once. Undefined when the base map's,
  * the whole patch's or `map`'s separations can't be had: a change that is fine alone may still leave nothing between a
  * send and a blocked message beside the rest.
  */
@@ -802,11 +802,11 @@ function separationNotes(separations: NonNullable<ReviewOptions["separations"]>,
   const was = table(base);
   const whole = was && table(patched);
   // a pair a firmware doesn't name holds as in the base map, and one a mode doesn't name as without the mode; a
-  // firmware's pair in a mode is left unnamed where the base map in that mode names it, so that comes before the
-  // firmware's own
+  // firmware's pair in a mode the caller doesn't name holds as that firmware's pair where the firmware names one (it
+  // moves the pair), else as the base map's in that mode
   const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => {
     const { send, blocked } = s;
-    const views = [s, ...(s.mode && s.firmware ? [{ mode: s.mode }] : []), ...(s.mode ? [{ firmware: s.firmware }] : []), ...(s.firmware ? [{}] : [])];
+    const views = [s, ...(s.mode && s.firmware ? [{ firmware: s.firmware }, { mode: s.mode }] : []), ...(s.mode || s.firmware ? [{}] : [])];
     for (const v of views) {
       const hit = t.get(key({ ...v, send, blocked }));
       if (hit) return hit;

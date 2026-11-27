@@ -282,7 +282,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   change moves the block off it, and so does blocking a message whose payload another change edits. A caller may pass an optional function that gives a map's block separations
   (`reviewReasons(patch, map, { separations })`, each a send, the blocked message it shares a cmd with and what keeps
   them apart, with the firmware and the mode it holds in where the caller names them; a pair a firmware or mode
-  doesn't name holds as without it). The reason then names each pair the change touches and how its separation changes from the base map
+  doesn't name holds as without it, and one a firmware doesn't name in a mode holds as that firmware's pair where it
+  names one, else as the base map's in that mode). The reason then names each pair the change touches and how its separation changes from the base map
   to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now
   shares a blocked cmd ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that
   still holds. Without them, when the base map, that map or the whole patch's map doesn't load, or past the first 64
