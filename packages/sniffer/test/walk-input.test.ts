@@ -207,13 +207,20 @@ test("a key or typed text after other input waits for a dialog that input may ha
 });
 
 test("in an open menu, shortcut letters and typed text are refused; arrows, Enter on a safe item and clicks still work", async () => {
-  const item = (name: string) => async () => ({ found: true as const, element: { name, controlType: "MenuItem", automationId: "", className: "", enabled: true, rect: RECT } });
+  const item = (name: string, controlType = "MenuItem") => async () => ({ found: true as const, element: { name, controlType, automationId: "", className: "", enabled: true, rect: RECT } });
   const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
   for (const step of ["key:f", "key:alt+f", "key:shift+u", "key:2", "type:u"]) {
     const { host, log } = inputHost(0, { focused: item("Open...") });
     await assert.rejects(run(host, [step]), /a menu is open/, step);
     assert.equal(log.filter((l) => !l.startsWith("front")).length, 0, step);
   }
+  // The menu bar itself has the focus after a bare Alt, and some editors report the open menu rather than its item.
+  for (const type of ["MenuBar", "Menu"]) {
+    const { host } = inputHost(0, { focused: item("", type) });
+    await assert.rejects(run(host, ["key:u"]), /a menu is open/, type);
+  }
+  const notMenu = inputHost(0, { focused: item("Menu", "Button") });
+  await run(notMenu.host, ["key:u"]);
   const safe = inputHost(0, { focused: item("Open..."), element: item("Open...") });
   await run(safe.host, ["key:down", "key:enter", "key:ctrl+o", "click:1,1", "key:esc"]);
   assert.equal(safe.log.filter((l) => !l.startsWith("front")).length, 5);

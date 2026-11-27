@@ -160,8 +160,8 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
         // In an open menu a letter picks the item it underlines, unseen; arrows and Enter (checked above) or a click
         // reach the same item with its name checked.
-        if ((step.op === "type" || (step.op === "key" && !codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit))) && (await menuOpen(d.host, win.pid))) {
-          throw new InputError(`step ${n + 1} (${step.op === "key" ? `key:${step.combo}` : "type"}) refused: a menu is open, and a letter there picks an item unseen. Click the item, or move to it with the arrow keys and press Enter`);
+        if ((step.op === "type" || (step.op === "key" && pressesLetter(codes))) && (await menuOpen(d.host, win.pid))) {
+          throw new InputError(`step ${n + 1} (${stepName(step)}) refused: a menu is open, and a letter there picks an item unseen. Click the item, or move to it with the arrow keys and press Enter`);
         }
       }
       const res = await send(d.host, win, scale, step);
@@ -212,18 +212,24 @@ async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number,
   if (!hazard) return;
   // A dialog's mnemonic presses its button on Alt plus the letter, and on the bare letter too whenever the focus isn't
   // in a text box; typed text is only safe inside one.
-  const mnemonic = step.op === "key" && (codes.includes(KEYS.alt) || (!codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit)));
+  const mnemonic = step.op === "key" && (codes.includes(KEYS.alt) || pressesLetter(codes));
   const typedOutsideBox = step.op === "type" && !(await focusedInTextBox(d.host, win.pid));
   if (mnemonic || typedOutsideBox) {
-    throw new InputError(`step ${n + 1} (${step.op === "key" ? `key:${step.combo}` : "type"}) refused: it can press the dialog's "${hazard}" button through its shortcut letter, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+    throw new InputError(`step ${n + 1} (${stepName(step)}) refused: it can press the dialog's "${hazard}" button through its shortcut letter, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
   }
 }
 
 const isLetterOrDigit = (vk: number) => (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5a);
 
+/** A letter or digit without ctrl, which a menu or a dialog may take as a shortcut letter. */
+const pressesLetter = (codes: number[]) => !codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit);
+
+const stepName = (step: { op: "key"; combo: string } | { op: "type" }) => (step.op === "key" ? `key:${step.combo}` : "type");
+
+/** Whether the focus is in a menu (an open menu, or the menu bar after Alt), as UI Automation reports it. */
 async function menuOpen(host: WindowHost, pid: number): Promise<boolean> {
   const at = await host.focused(pid);
-  return at.found && (at.element.controlType === "MenuItem" || at.element.controlType === "Menu" || at.element.controlType === "MenuBar");
+  return at.found && /^Menu(Item|Bar)?$/.test(at.element.controlType);
 }
 
 async function focusedInTextBox(host: WindowHost, pid: number): Promise<boolean> {
