@@ -36,16 +36,32 @@ function shortHex(dw) {
   return [st, d1, d2].slice(0, n).map((b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
 }
 
-// The same call can pass through a WINMM.dll thunk and its winmmbase.dll implementation (both hooked): an identical
-// message seen again within 3 ms is that one call twice.
-let lastKey = "", lastT = 0;
 function emit(o) {
   o.t = Date.now();
-  const key = (o.dir || "") + (o.kind || "") + (o.hex || o.text || "");
-  if (o.hex && key === lastKey && o.t - lastT < 3) return;
-  lastKey = key;
-  lastT = o.t;
   send(o);
+}
+
+// The same call can pass through a WINMM.dll thunk and on into its winmmbase.dll implementation, both hooked: only
+// the outermost hooked call of a kind on a thread reports, so one call is one record. Two real calls in a row, however
+// close, are two records: nothing is dropped.
+const active = new Map(); // "<kind>|<thread id>" -> nesting depth
+function outermost(kind, handlers) {
+  return {
+    onEnter(args) {
+      const key = kind + "|" + this.threadId;
+      const depth = active.get(key) || 0;
+      active.set(key, depth + 1);
+      this.report = depth === 0;
+      if (this.report && handlers.onEnter) handlers.onEnter.call(this, args);
+    },
+    onLeave(r) {
+      const key = kind + "|" + this.threadId;
+      const depth = (active.get(key) || 1) - 1;
+      if (depth === 0) active.delete(key);
+      else active.set(key, depth);
+      if (this.report && handlers.onLeave) handlers.onLeave.call(this, r);
+    },
+  };
 }
 
 const hookedAddrs = new Set();
@@ -71,13 +87,13 @@ function hookInputCallback(cb) {
   const key = cb.toString();
   if (hookedCallbacks.has(key) || driverCbHooked.size > 0) return; // DriverCallback already sees all input
   hookedCallbacks.add(key);
-  Interceptor.attach(cb, {
+  Interceptor.attach(cb, outermost("input", {
     onEnter(args) {
       const msg = args[1].toUInt32();
       if (msg === MIM_OPEN || msg === MIM_CLOSE) return;
       onInput(args[0], msg, args[3]);
     },
-  });
+  }));
   emit({ kind: "info", text: "hooked the editor's MIDI input callback" });
 }
 
@@ -86,7 +102,7 @@ function install(winmm) {
     const a = winmm.findExportByName(name);
     if (!a || hookedAddrs.has(a.toString())) return;
     hookedAddrs.add(a.toString());
-    Interceptor.attach(a, handlers);
+    Interceptor.attach(a, outermost(name, handlers));
   };
   const opened = (dir) => ({
     onEnter(a) {
@@ -126,7 +142,7 @@ function hookDriverCallback(mod) {
   const a = mod.findExportByName("DriverCallback");
   if (!a || driverCbHooked.has(a.toString())) return;
   driverCbHooked.add(a.toString());
-  Interceptor.attach(a, { onEnter(args) { onInput(args[2], args[3].toUInt32(), args[5]); } });
+  Interceptor.attach(a, outermost("input", { onEnter(args) { onInput(args[2], args[3].toUInt32(), args[5]); } }));
   emit({ kind: "info", text: `DriverCallback hooked in ${mod.name}` });
 }
 
