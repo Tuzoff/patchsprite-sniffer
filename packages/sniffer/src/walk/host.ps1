@@ -224,7 +224,7 @@ public static class WalkDialog {
   }
 
   // The file-name box: the Edit with the common dialogs' id (1001, or 1152 in a folder picker), else the Edit inside
-  // the file-name combo box. Never another edit (the search box, the address bar).
+  // the file-name combo box (cmb13). Never another edit (the search box, the address bar).
   public static IntPtr FileBox(IntPtr d) {
     IntPtr combo = IntPtr.Zero;
     foreach (var c in Children(d)) {
@@ -232,7 +232,8 @@ public static class WalkDialog {
       int id = GetDlgCtrlID(c);
       if (id == 1001 || id == 1152) return c;
       var p = GetParent(c);
-      if (combo == IntPtr.Zero && Class(p) == "ComboBox" && Class(GetParent(p)) == "ComboBoxEx32") combo = c;
+      // The file-name combo is cmb13 (1148); the address bar is a ComboBoxEx32 too, with another id.
+      if (combo == IntPtr.Zero && Class(p) == "ComboBox" && Class(GetParent(p)) == "ComboBoxEx32" && GetDlgCtrlID(GetParent(p)) == 1148) combo = c;
     }
     return combo;
   }

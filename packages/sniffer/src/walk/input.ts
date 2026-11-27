@@ -17,7 +17,7 @@ export type Step =
 export const KEYS: Readonly<Record<string, number>> = {
   enter: 0x0d, esc: 0x1b, tab: 0x09, backspace: 0x08, delete: 0x2e, space: 0x20,
   up: 0x26, down: 0x28, left: 0x25, right: 0x27, home: 0x24, end: 0x23, pgup: 0x21, pgdn: 0x22,
-  ctrl: 0x11, shift: 0x10, alt: 0x12,
+  ctrl: 0x11, shift: 0x10, alt: 0x12, plus: 0xbb, minus: 0xbd,
   f1: 0x70, f2: 0x71, f3: 0x72, f4: 0x73, f5: 0x74, f6: 0x75, f7: 0x76, f8: 0x77, f9: 0x78, f10: 0x79, f11: 0x7a, f12: 0x7b,
 };
 
@@ -115,11 +115,11 @@ export function toScreen(rect: Rect, scale: number, x: number, y: number): { x: 
   return { x: Math.round(rect.left + x / scale), y: Math.round(rect.top + y / scale) };
 }
 
-/** Runs the steps in order, after `beforeInput`. Stops at the first refused step and says which. */
+/** Runs the steps in order, each try after `beforeInput`, so input stops the moment the capture does. Stops at the
+ * first refused step and says which. */
 export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
   const scale = d.scale ?? 0.5;
   const sleep = d.sleep ?? wait;
-  await d.beforeInput();
   for (const [n, step] of steps.entries()) {
     if (step.op === "wait") {
       await sleep(step.seconds * 1000);
@@ -128,9 +128,14 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
     const deadline = Date.now() + (d.coveredTimeoutMs ?? 30_000);
     for (;;) {
       // Look the window up again on every try: the editor may have moved or come back to the front.
+      await d.beforeInput();
       const win = await editorWindow(d.host, d.app);
       await d.host.front(win.hwnd);
-      if (!d.hazardApproved && (step.op === "click" || step.op === "dclick" || step.op === "rclick")) await refuseHazard(d.host, win, scale, step, n);
+      if (!d.hazardApproved) {
+        // A drag presses and releases like a click, so both its ends are checked too.
+        if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
+        if (step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, { op: step.op, x: step.x1, y: step.y1 }, n);
+      }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
       if (Date.now() >= deadline) {

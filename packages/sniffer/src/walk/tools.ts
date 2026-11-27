@@ -5,19 +5,14 @@
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import type { RegisterTools } from "../mcp/server.ts";
-import type { Recorder } from "../recorder.ts";
+import { refused, ro, text, type RegisterTools } from "../mcp/server.ts";
 import { PowerShellHost, type WindowHost } from "./host.ts";
 import { parseStep, runSteps } from "./input.ts";
 import { fillDialog, listDialogs, readControl } from "./read.ts";
 import { takeEditorShot } from "./shot.ts";
 
-const ro = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 // Input can change or overwrite what the editor holds, so it is marked destructive.
 const input = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
-
-const text = (t: string, structured?: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: t }], ...(structured ? { structuredContent: structured } : {}) });
-const refused = (e: unknown) => ({ content: [{ type: "text" as const, text: (e as Error).message }], isError: true });
 
 /** A capture's screenshot folder: beside the capture file, named after it. */
 export const shotsDir = (captureFile: string): string => captureFile.replace(/\.jsonl$/, "") + ".shots";
@@ -36,10 +31,10 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
   return (server, { recorder }) => {
     let current: { file: string; host: WindowHost } | undefined;
     /** The running capture's editor and window host; refuses when no capture runs. */
-    const session = (r: Recorder) => {
-      const file = r.file;
-      const app = r.editor;
-      if (!r.active || !file || !app) throw new Error("No capture is running. The walk tools work only during a capture: start_capture first, so every input is recorded and the device is held.");
+    const session = () => {
+      const file = recorder.file;
+      const app = recorder.editor;
+      if (!recorder.active || !file || !app) throw new Error("No capture is running. The walk tools work only during a capture: start_capture first, so every input is recorded and the device is held.");
       if (current?.file !== file) {
         current?.host.close();
         current = { file, host: makeHost(shotsDir(file)) };
@@ -60,7 +55,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       },
       async ({ name }) => {
         try {
-          const s = session(recorder);
+          const s = session();
           const shot = await takeEditorShot(s.host, { app: s.app, dir: s.dir, name, scale, sleep: o.sleep });
           const data = (await readFile(shot.path)).toString("base64");
           return {
@@ -88,7 +83,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       },
       async ({ steps, hazardApproved }) => {
         try {
-          const s = session(recorder);
+          const s = session();
           const parsed = steps.map(parseStep);
           await runSteps({ host: s.host, app: s.app, beforeInput, scale, sleep: o.sleep, hazardApproved }, parsed);
           return text(`Done: ${steps.length} step${steps.length === 1 ? "" : "s"}.`);
@@ -107,7 +102,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       },
       async ({ x, y }) => {
         try {
-          const s = session(recorder);
+          const s = session();
           const c = await readControl({ host: s.host, app: s.app, scale }, x, y);
           if (!c) return text("UI Automation sees no control of the editor's there.", { found: false });
           return text(JSON.stringify(c), { found: true, control: c });
@@ -125,7 +120,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       },
       async () => {
         try {
-          const s = session(recorder);
+          const s = session();
           const d = await listDialogs({ host: s.host, app: s.app, scale });
           return text(d.length ? JSON.stringify(d) : "No dialog is open.", { dialogs: d });
         } catch (e) {
@@ -143,7 +138,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
       },
       async ({ title, path, button }) => {
         try {
-          const s = session(recorder);
+          const s = session();
           const left = await fillDialog({ host: s.host, app: s.app, scale, beforeInput, allowedRoot: s.files }, title, path, button);
           return text(left.length ? `Done. Still open: ${left.map((t) => JSON.stringify(t)).join(", ")}.` : "Done. No dialog is open now.", { remaining: left });
         } catch (e) {

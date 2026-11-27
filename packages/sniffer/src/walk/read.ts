@@ -3,7 +3,7 @@
 // can't show. Filling a dialog gives the editor input, so it runs `beforeInput` (the pedal lock) first.
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import type { DialogInfo, FillResult, Rect, UiElement, WindowHost } from "./host.ts";
-import { editorWindow, InputError, toScreen } from "./input.ts";
+import { editorWindow, HAZARD, InputError, toScreen } from "./input.ts";
 
 export interface ReadDeps {
   host: WindowHost;
@@ -52,11 +52,18 @@ export const REFUSED_EXTENSIONS: readonly string[] = [
 /** Refuses a dialog path outside `root` or with a refused extension; returns the resolved path. */
 export function checkDialogPath(root: string, path: string): string {
   if (/[\r\n]/.test(path)) throw new InputError("a path is one line");
+  // Characters no Windows file name holds: a dialog's box reads quotes as a list of files and * ? as a filter.
+  if (/["*?<>|]/.test(path)) throw new InputError('a dialog path may not hold " * ? < > or |');
   if (!isAbsolute(path)) throw new InputError("give the dialog a full path, inside the capture's folder");
   const full = resolve(path);
   const rel = relative(resolve(root), full);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
     throw new InputError(`a dialog may only be pointed inside the capture's folder (${resolve(root)}), so nothing else on the computer can be opened or overwritten`);
+  }
+  // Windows drops a name's trailing dots and spaces ("update.bin." opens update.bin) and reads "name:stream" as a
+  // stream of that file, so neither can hide an extension.
+  if (full.split(/[\\/]/).some((seg) => /[. ]$/.test(seg)) || full.replace(/^[a-z]:/i, "").includes(":")) {
+    throw new InputError("a dialog path may not end a name in a dot or space, or hold a colon after the drive");
   }
   const ext = extname(full).toLowerCase();
   if (REFUSED_EXTENSIONS.includes(ext)) throw new InputError(`a dialog fill never uses a ${ext} file: firmware, updates, programs and SysEx files are refused`);
@@ -67,6 +74,9 @@ export function checkDialogPath(root: string, path: string): string {
  * Returns the dialogs still open afterwards. */
 export async function fillDialog(d: FillDeps, title: string, path: string, button: string): Promise<string[]> {
   if (!title || !button) throw new InputError("a dialog fill needs the dialog's title and the button's caption");
+  // Every #32770 window of the editor counts as a dialog, its own ones too, so a fill never presses a button that
+  // a click would need the user's say-so for.
+  if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}": ask the user, and press it with editor_input if they say yes`);
   const full = checkDialogPath(d.allowedRoot, path);
   await d.beforeInput();
   const win = await editorWindow(d.host, d.app);

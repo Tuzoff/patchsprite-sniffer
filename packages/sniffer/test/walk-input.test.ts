@@ -56,6 +56,7 @@ test("steps parse in the walk prompt's short form", () => {
 test("key combinations become virtual-key codes", () => {
   assert.deepEqual(keyCodes("ctrl+shift+z"), [0x11, 0x10, 0x5a]);
   assert.deepEqual(keyCodes("enter"), [0x0d]);
+  assert.deepEqual(keyCodes("ctrl+plus"), [0x11, 0xbb]);
   assert.deepEqual(keyCodes("7"), [0x37]);
 });
 
@@ -70,7 +71,7 @@ test("steps run in order, after the pedal-lock check, with the editor brought to
   let locked = 0;
   await runSteps({ host, app: "Editor.exe", beforeInput: async () => void locked++, sleep: noSleep },
     ["click:10,20", "dclick:0,0", "rclick:1,1", "wheel:5,5,2", "drag:0,0,10,10", "key:ctrl+z", "type:Lead", "wait:1"].map(parseStep));
-  assert.equal(locked, 1);
+  assert.equal(locked, 7, "the lock is checked before every input step");
   assert.deepEqual(log.filter((l) => !l.startsWith("front")), [
     "click 42 120,90 left x1",
     "click 42 100,50 left x2",
@@ -115,6 +116,12 @@ test("a click on a firmware, reset or store control is refused until the user ap
     assert.equal(log.filter((l) => l.startsWith("click")).length, 0, name);
     await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved: true }, [parseStep("click:1,1")]);
     assert.equal(log.filter((l) => l.startsWith("click")).length, 1, name);
+  }
+  {
+    // a drag presses and releases too, so it is checked like a click
+    const { host, log } = inputHost(0, { element: named("Firmware Update") });
+    await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("drag:1,1,1,1")]), /refused: it would press/);
+    assert.equal(log.filter((l) => l.startsWith("drag")).length, 0);
   }
   for (const name of ["Gain", "Storage"]) {
     const { host, log } = inputHost(0, { element: named(name) });
@@ -184,9 +191,14 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
     [join(root, "update.BIN"), /\.bin file/],
     [join(root, "fw.syx"), /\.syx file/],
     [join(root, "setup.exe"), /\.exe file/],
+    [join(root, "update.bin."), /dot or space/],
+    [join(root, "update.bin "), /dot or space/],
+    [join(root, "notes.prst:update.bin"), /colon/],
+    [`${join(root, "a.prst")}" "${join(tmpdir(), "mine.prst")}`, /may not hold/],
   ] as const) {
     await assert.rejects(fillDialog(d, "Open", path, "Open"), why, path);
   }
+  await assert.rejects(fillDialog(d, "Open", join(root, "ok.prst"), "Update"), /never presses "Update"/);
   assert.equal(filled, 0);
   assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
 });
