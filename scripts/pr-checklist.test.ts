@@ -36,7 +36,7 @@ test("a box ticked only inside a comment or a code block doesn't count", () => {
 });
 
 test("a box hidden in an indented or tilde fence, an unclosed comment or an indented code block doesn't count", () => {
-  for (const hide of ["  ```\n- [x] **Simplify**\n  ```", "~~~\n- [x] **Simplify**\n~~~", "<!--\n- [x] **Simplify**", "    - [x] **Simplify**"]) {
+  for (const hide of ["  ```\n- [x] **Simplify**\n  ```", "~~~\n- [x] **Simplify**\n~~~", "<!--\n- [x] **Simplify**", "<!<!-- -->--\n- [x] **Simplify**\n-->", "    - [x] **Simplify**"]) {
     const body = ticked("S1").replace("- [x] **Simplify**", hide);
     assert.ok(problems(body, IDS).some((l) => l.includes('"Simplify"')), hide);
   }

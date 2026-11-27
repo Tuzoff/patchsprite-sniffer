@@ -12,10 +12,13 @@ export function problems(body: string, ids: Set<string>): string[] {
   const out: string[] = [];
   // comments and fenced code say nothing, so a template's example can't tick a box or name an id; GitHub hides an
   // unclosed comment or fence to the end of the body, so they run to the end here too
-  const text = body
-    .replace(/\r\n?/g, "\n")
-    .replace(/<!--[\s\S]*?(?:-->|(?![\s\S]))/g, "")
-    .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?(?:^ {0,3}\1|(?![\s\S]))/gm, "");
+  let text = body.replace(/\r\n?/g, "\n");
+  // until nothing changes, so a comment split around another ("<!<!-- -->--") can't leave a new one behind
+  for (let prev = ""; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<!--[\s\S]*?(?:-->|(?![\s\S]))/g, "");
+  }
+  text = text.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?(?:^ {0,3}\1|(?![\s\S]))/gm, "");
   const section = (name: string) => {
     const m = new RegExp(`^## ${name}[ \\t]*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m").exec(text);
     return m ? m[1] : "";
