@@ -778,9 +778,9 @@ const shown = (s: string, max = 80): string => {
  * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
  * since an unnamed pair holds on every firmware that doesn't say otherwise; a pair named in a mode likewise with the
  * pair the caller leaves it unnamed for (on a firmware, the base map's in that mode first, then that firmware's, then
- * the base map's). The base map's and the whole patch's
- * separations are asked for once. Undefined when the base map's, the whole patch's or `map`'s separations can't be
- * had: a change that is fine alone may still leave nothing between a send and a blocked message beside the rest.
+ * the base map's). The base map's and the whole patch's separations are asked for once. Undefined when the base map's,
+ * the whole patch's or `map`'s separations can't be had: a change that is fine alone may still leave nothing between a
+ * send and a blocked message beside the rest.
  */
 function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): (map: unknown, names: Set<string>) => string[] | undefined {
   const key = (s: { firmware?: string; mode?: string; send: string; blocked: string }) => [s.firmware ?? "", s.mode ?? "", s.send, s.blocked].join(SEP);
