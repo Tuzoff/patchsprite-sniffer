@@ -52,9 +52,10 @@ export const REFUSED_EXTENSIONS: readonly string[] = [
  * backups only as these, so a save may write one. */
 export const SAVE_ONLY_EXTENSIONS: readonly string[] = [".syx", ".mid"];
 
-/** A fill saves when the button it presses says Save; the title alone doesn't count, since an Open dialog may be
- * titled "Open saved backup". */
-export const isSave = (button: string): boolean => /save/i.test(button);
+/** A fill saves when the button it presses is the standard Save button: its caption is exactly "Save" ("&" ignored).
+ * The title doesn't count, since an Open dialog may be titled "Open saved backup", nor does a button such as "Save to
+ * device", which may send the file on. */
+export const isSave = (button: string): boolean => button.replace(/&/g, "").trim().toLowerCase() === "save";
 
 /** Refuses a dialog path outside `root` or with a refused extension; returns the resolved path. */
 export function checkDialogPath(root: string, path: string, save = false): string {
