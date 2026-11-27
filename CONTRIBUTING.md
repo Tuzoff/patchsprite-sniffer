@@ -24,6 +24,9 @@ The CLA applies to every part of this repository, including the shared engine pa
   private plans: this repository has no milestones and no labels starting `stage`, and its files, commit and tag
   messages, labels, and issue and pull request titles and bodies may cite a private requirement id (such as `F39`) but
   never describe it. Our own ids, `S1` and up, are listed in `docs/requirements.md`.
+- **`checklist`**: the pull request body's `## Merge gate` boxes are ticked and its `Requirements:` line names ids from
+  `docs/requirements.md` (or says `none (why)`), as the template lays out. For a pull request from outside the team, a
+  maintainer runs the reviews and ticks the boxes.
 - **CLA**: CLA Assistant, as above.
 
 Issue and pull request text is public, and only titles and bodies are checked, for the plans above; comments are not
