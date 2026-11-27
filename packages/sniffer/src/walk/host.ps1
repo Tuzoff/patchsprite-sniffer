@@ -183,7 +183,7 @@ public static class WalkInput {
   }
 }
 '@
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase  # WindowsBase holds System.Windows.Point
 
 function Find-Editor([string]$exe) {
   $name = [IO.Path]::GetFileNameWithoutExtension($exe)
