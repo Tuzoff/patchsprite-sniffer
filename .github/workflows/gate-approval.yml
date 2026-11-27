@@ -19,6 +19,9 @@ on:
   pull_request_target:
     # edited: a new base branch changes the pull request's files
     types: [opened, synchronize, reopened, labeled, unlabeled, edited, ready_for_review]
+    # only pull requests into main: a status belongs to a commit, so one into another branch could flip main's verdict
+    # (a change of base branch to main is an `edited` event of the new base, which runs)
+    branches: [main]
 
 # No secrets: this public repo's CI never gets any, and none may ever be added (see README).
 permissions:
