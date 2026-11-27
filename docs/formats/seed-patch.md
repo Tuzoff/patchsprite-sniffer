@@ -101,7 +101,7 @@ map-check record about the same entry use the same name.
 | `setting/<id>` | a global setting | `/settings/items/*` |
 | `linked/<group>/<set>` | a set of paired parameters in a parameter group | `/parameters/groups/<group>/linked/<set>` |
 | `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), inside one of the known sections in the next row | the field's own path (`/transport/timing/compareToggle`) |
-| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor`, `modes` | that whole section | `/<section>` |
+| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor`, `modes`, `cautions` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 | `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
 
@@ -294,8 +294,8 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
 - anything new that writes to the unit: a value that makes a message's `dir` `send` where it wasn't, or a new
   control;
-- text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
-  prints for the model driving the vendor editor.
+- text a model reads: `agentNotes` and `/cautions` (shown in the unit's status), which reach the player's chat model,
+  and `safety.notes`, which the sniffer's walk prints for the model driving the vendor editor.
 
 Away from a blocked cmd, a repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values)
 isn't on this list on purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's

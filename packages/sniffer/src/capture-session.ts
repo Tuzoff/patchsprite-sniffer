@@ -50,6 +50,13 @@ export interface CaptureSessionOptions {
   now?: () => number;
 }
 
+/** A record the capture file refused while attached: it ends the session instead of a retry. */
+class WriteFailed extends Error {
+  constructor(cause: unknown) {
+    super((cause as Error)?.message ?? String(cause), { cause });
+  }
+}
+
 /** Attach failures in a row on one process before the session waits for a new one (the editor restarting). */
 const MAX_TRIES = 5;
 
@@ -75,8 +82,19 @@ export class CaptureSession {
     const wait = (ms: number) => sleep(ms, undefined, { signal }).catch(() => undefined);
     let failedPid: number | undefined;
     let tries = 0;
+    let listFailed = false;
     while (!signal.aborted) {
-      const pid = await this.findEditor();
+      let pid: number | undefined;
+      try {
+        pid = await this.findEditor();
+      } catch (e) {
+        // a passing failure to list processes: say so once, and keep looking
+        if (!listFailed) this.event("warning", { text: `could not list processes: ${(e as Error).message}`.slice(0, 1024) });
+        listFailed = true;
+        await wait(this.o.retryMs);
+        continue;
+      }
+      listFailed = false;
       if (pid === undefined || (pid === failedPid && tries >= MAX_TRIES)) {
         await wait(this.o.pollMs);
         continue;
@@ -88,6 +106,7 @@ export class CaptureSession {
         await this.attached(pid, signal);
         failedPid = undefined;
       } catch (e) {
+        if (e instanceof WriteFailed) throw e.cause;
         failedPid = pid;
         tries++;
         this.event("error", { pid, text: `could not attach to the editor: ${(e as Error).message}`.slice(0, 1024) });
@@ -112,10 +131,17 @@ export class CaptureSession {
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) done(); // stopped while attaching
     let script: FridaScript | undefined;
+    let writeFailed: WriteFailed | undefined;
     const onMessage = (m: ScriptMessage) => {
       if (m.type === "error") return this.event("error", { text: `capture agent: ${m.description}`.slice(0, 1024) });
       const r = agentRecord(m.payload, this.o.now());
-      if (r) this.o.write(r);
+      try {
+        if (r) this.o.write(r);
+      } catch (e) {
+        // the capture file can't take it (disk full): no point capturing on, so the session ends with the error
+        writeFailed ??= new WriteFailed(e);
+        done();
+      }
     };
     try {
       script = await session.createScript(this.o.agentSource);
@@ -133,6 +159,7 @@ export class CaptureSession {
       }
       script?.message.disconnect(onMessage);
     }
+    if (writeFailed) throw writeFailed;
     if (detachedReason !== undefined) this.event("detached", { pid, text: detachedReason.slice(0, 1024) });
   }
 }

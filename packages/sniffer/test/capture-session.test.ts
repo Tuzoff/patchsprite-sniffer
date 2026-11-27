@@ -103,3 +103,36 @@ test("stopping before the editor ever starts ends at once", async () => {
   await c.stop();
   assert.deepEqual(c.records, []);
 });
+
+test("a failure to list processes is a warning, once, and the session keeps looking", async () => {
+  const device = new FakeDevice();
+  let fails = 3;
+  const real = device.enumerateProcesses.bind(device);
+  device.enumerateProcesses = async () => {
+    if (fails-- > 0) throw new Error("access denied");
+    return real();
+  };
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const c = start(device);
+  await device.nextSession();
+  await c.stop();
+  assert.equal(c.kinds().filter((k) => k === "warning").length, 1);
+});
+
+test("a record the capture file can't take ends the session with that error, letting go of the editor", async () => {
+  const device = new FakeDevice();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const records: CaptureRecord[] = [];
+  const write = (r: CaptureRecord) => {
+    if (r.type === "midi") throw new Error("disk full");
+    records.push(r);
+  };
+  const session = new CaptureSession({ device, editorExe: "AcmeEdit.exe", attachDelayMs: 0, write, pollMs: 5, retryMs: 5 });
+  const done = session.run(new AbortController().signal);
+  const s = await device.nextSession();
+  await until(() => records.some((r) => r.type === "event" && r.kind === "attached"));
+  s.scripts[0].send({ dir: "out", kind: "sysex", h: "0x1a2b", hex: "f07d0110f7" });
+  await assert.rejects(done, /disk full/);
+  assert.equal(s.detachedByUs, true);
+  assert.equal(device.sessions.length, 1, "no retry");
+});

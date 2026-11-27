@@ -10,7 +10,7 @@
     "packages/sniffer"
   ],
   "scripts": {
-    "test": "node --test \"packages/*/test/*.test.ts\"",
+    "test": "node --test \"packages/*/test/*.test.ts\" \"scripts/*.test.ts\"",
     "typecheck": "tsc --noEmit -p .",
     "schemas": "node scripts/gen-schemas.ts"
   },

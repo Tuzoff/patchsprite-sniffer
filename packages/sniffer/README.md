@@ -13,9 +13,12 @@ node packages/sniffer/bin/sniff.ts capture --editor AcmeEdit.exe --attach-delay 
 ```
 
 `--editor` is the editor's executable file name as Task Manager shows it. Start the capture before or after the
-editor: it waits for the editor, attaches `--attach-delay` seconds after it appears (attaching too early can leave an
+editor: it holds the device for Patchsprite (the app leaves it alone until the capture stops), waits for the editor, attaches `--attach-delay` seconds after it appears (attaching too early can leave an
 editor's window blank), and attaches again if the editor restarts. Press Ctrl+C to stop. The capture goes to
 `capture-<time>-<id>.jsonl` in the current folder, or to `--out FILE`, and is never written over.
+
+The hold on the device is Patchsprite's pedal lock, which counts as stale after six hours. Keep a capture shorter
+than that: a longer one keeps recording, but the app could take the device meanwhile.
 
 A capture can hold your device's own content, such as presets the editor read from it. Keep it to yourself: don't
 attach it to a public issue.

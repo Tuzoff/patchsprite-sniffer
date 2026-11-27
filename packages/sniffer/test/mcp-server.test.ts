@@ -11,6 +11,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { parseCapture } from "@patchsprite/engine/capture";
 import { acquirePedalLock, pedalLockPath, releasePedalLock } from "@patchsprite/engine/pedal-lock";
 import { createServer, INSTRUCTIONS } from "../src/mcp/server.ts";
+import { CaptureWriter } from "../src/capture-writer.ts";
 import { Recorder } from "../src/recorder.ts";
 import { FakeDevice, type FakeSession } from "./fake-frida.ts";
 
@@ -107,6 +108,49 @@ test("a failed self-test stops the capture and says why", async () => {
   const c = parseCapture(readFileSync(file, "utf8"));
   assert.ok(c.ok);
   assert.equal(c.capture.end?.reason, "selfTestFailed");
+});
+
+test("a capture that fails on its own: the status says so, and stop ends the file as an error and frees the device", async () => {
+  const { env, device, call } = await rig();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const write = CaptureWriter.prototype.write;
+  CaptureWriter.prototype.write = function (r) {
+    if (r.type === "event") throw new Error("disk full");
+    return write.call(this, r);
+  };
+  try {
+    const { data } = await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0 });
+    let status = await call("capture_status");
+    for (let i = 0; i < 400 && !status.data?.failed; i++) status = (await sleep(5), await call("capture_status"));
+    assert.match(status.text, /^The capture stopped: disk full\. Stop it with stop_capture\./);
+    await call("stop_capture");
+    const c = parseCapture(readFileSync(data!.file as string, "utf8"));
+    assert.ok(c.ok);
+    assert.deepEqual([c.capture.end?.reason, c.capture.end?.text], ["error", "The capture stopped: disk full"]);
+    assert.ok(acquirePedalLock("check", { env }).ok);
+  } finally {
+    CaptureWriter.prototype.write = write;
+  }
+});
+
+test("stop_capture while a step is still ending waits for it, so the step closes in the file before the end", async () => {
+  const { device, call } = await rig();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const { data } = await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0 });
+  const s = await device.nextSession();
+  for (let i = 0; i < 400 && !(await call("capture_status")).data?.attached; i++) await sleep(5);
+  await call("begin_step", { label: "Drive: off → on" });
+  exchange(s, "f0 7d 01 12 01 f7", "f0 7d 01 31 f7");
+  const ending = call("end_step");
+  await sleep(10); // the step waits 40 ms for quiet
+  const [ended, stopped] = await Promise.all([ending, call("stop_capture")]);
+  assert.equal(ended.error, false, ended.text);
+  assert.equal(stopped.error, false, stopped.text);
+  const c = parseCapture(readFileSync(data!.file as string, "utf8"));
+  assert.ok(c.ok);
+  const types = c.capture.records.map((r) => r.type);
+  assert.deepEqual(types.slice(-2), ["stepEnd", "end"]);
+  assert.equal(c.capture.end?.reason, "stopped");
 });
 
 test("someone else holding the device: start_capture refuses and creates nothing", async () => {
