@@ -802,6 +802,8 @@ const makesSend = (v: unknown, last: string | undefined): boolean => (last === "
 const isMeasured = (v: unknown): boolean =>
   isObject(v) && typeof v.value === "number" && Object.keys(v).every((k) => ["value", "unit", "measuredOn", "date", "source"].includes(k));
 
+const HOST_REASON = "changes which port, USB unit or vendor app the map looks for";
+
 export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions = {}): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
   const patched = applySeedPatch(base, p).map;
@@ -850,9 +852,10 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       // the identity decides which unit the map drives at all, whatever the change's evidence
       if (segs[0] === "identity") reasons.add("changes which unit the map drives (its identity)");
-      // the driver picks the code that runs the unit; the host, which port and USB unit the map is used for
+      // the driver picks the code that runs the unit; the host, which port, USB unit and vendor apps the map looks for
+      // (a measured value there is only a timing, exempt as in the framing)
       if (segs[0] === "driver") reasons.add("changes which driver runs the unit");
-      if (segs[0] === "host") reasons.add("changes which port or USB unit the map is used for");
+      if (segs[0] === "host" && !onlyTiming) reasons.add(HOST_REASON);
       if (segs[0] === "modes") reasons.add("changes which entries a mode uses");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
