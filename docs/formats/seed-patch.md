@@ -296,6 +296,7 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   only when both what it puts in and what it takes out are measured values (`{value, unit, measuredOn, date, source}`);
 - any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
+- `/identity`, which decides which unit the map drives at all: any change to it, its `source` included;
 - `/modes`, which decides which entries each mode reads and writes through;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
