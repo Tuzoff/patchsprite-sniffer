@@ -3,7 +3,7 @@
 // on any other window, and keys while another window is in front. A covered point is retried for a while (a chat
 // app's overlay may sit there), then refused. The caller's `beforeInput` runs first: the walk uses it to make sure it
 // holds the pedal lock.
-import type { FoundWindow, InputResult, Rect, WindowHost } from "./host.ts";
+import type { ElementResult, FoundWindow, InputResult, Rect, WindowHost } from "./host.ts";
 
 export type Step =
   | { op: "click" | "dclick" | "rclick"; x: number; y: number }
@@ -20,6 +20,9 @@ export const KEYS: Readonly<Record<string, number>> = {
   ctrl: 0x11, shift: 0x10, alt: 0x12, plus: 0xbb, minus: 0xbd,
   f1: 0x70, f2: 0x71, f3: 0x72, f4: 0x73, f5: 0x74, f6: 0x75, f7: 0x76, f8: 0x77, f9: 0x78, f10: 0x79, f11: 0x7a, f12: 0x7b,
 };
+
+/** Keys that press or delete the focused control. */
+const PRESS_KEYS = [KEYS.enter, KEYS.space, KEYS.delete, KEYS.backspace];
 
 export class InputError extends Error {}
 
@@ -71,6 +74,9 @@ export function parseStep(s: string): Step {
       return { op, combo: arg };
     case "type":
       if (!arg) throw new InputError(`"${s}": type needs text`);
+      // A typed line break, tab or other control character can press a button, move the focus onto one or delete;
+      // use key:enter, key:tab or key:backspace for those.
+      if (/[\x00-\x1f\x7f]/.test(arg)) throw new InputError(`"${s}": type takes one line of text; use key:enter or key:tab between steps`);
       return { op, text: arg };
     case "wait": {
       const [seconds] = nums(1);
@@ -135,6 +141,11 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         // A drag presses and releases like a click, so both its ends are checked too.
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
         if (step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, { op: step.op, x: step.x1, y: step.y1 }, n);
+        // Enter, space, delete and backspace act on whatever control has the focus, so they are checked like a click on it.
+        const codes = step.op === "key" ? keyCodes(step.combo) : [];
+        if (step.op === "key" && PRESS_KEYS.some((k) => codes.includes(k))) await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, codes.includes(KEYS.enter), n);
+        // A typed space presses a focused button too.
+        if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
       }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
@@ -147,12 +158,27 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
   }
 }
 
+function refuseIfHazard(at: ElementResult, what: string) {
+  if (at.found) refuseIfHazardName(at.element.name, what);
+}
+
+function refuseIfHazardName(name: string, what: string) {
+  if (HAZARD.test(name)) {
+    throw new InputError(`${what} "${name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+  }
+}
+
+async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, enter: boolean, n: number) {
+  const at = await host.focused(pid);
+  refuseIfHazard(at, `step ${n + 1} (${what}) refused: the focused control is`);
+  // Enter in a dialog presses its default button, whichever control has the focus.
+  if (enter && at.dialogHung) throw new InputError(`step ${n + 1} (${what}) refused: the dialog in front isn't answering, so what Enter would press is unknown. Take a screenshot and try again`);
+  if (enter && at.defaultButton) refuseIfHazardName(at.defaultButton, `step ${n + 1} (${what}) refused: Enter would press the dialog's default button`);
+}
+
 async function refuseHazard(host: WindowHost, win: FoundWindow, scale: number, step: { op: string; x: number; y: number }, n: number) {
   const p = toScreen(win.rect, scale, step.x, step.y);
-  const at = await host.element(win.pid, p.x, p.y);
-  if (at.found && HAZARD.test(at.element.name)) {
-    throw new InputError(`step ${n + 1} (${step.op}) refused: it would press "${at.element.name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
-  }
+  refuseIfHazard(await host.element(win.pid, p.x, p.y), `step ${n + 1} (${step.op}) refused: it would press`);
 }
 
 function send(host: WindowHost, win: FoundWindow, scale: number, s: Exclude<Step, { op: "wait" }>): Promise<InputResult> {

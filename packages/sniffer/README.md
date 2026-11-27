@@ -43,12 +43,15 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
   overlay, say) is retried for 30 s and then refused, and keys are sent only while one of the editor's windows is in
   front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
   (or write, flash, install, overwrite or import) is refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
-  controls hide their names, so the walk prompt's guardrails still apply there.
+  controls hide their names, so the walk prompt's guardrails still apply there. Enter, space, delete and backspace
+  are checked the same way against the control that has the keyboard focus.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which
   its screenshot can't show. A fill types the path into the dialog's file-name box and presses a button by caption.
-  The path must be inside the capture's folder, so nothing else on the computer can be opened or saved over, and
-  firmware, update, program and SysEx files are refused even there.
+  The path must be inside the capture's own `.files` folder (beside the capture, like `.shots`), so no other capture,
+  shot or file on the computer can be opened or saved over, and firmware, update and program files are refused even
+  there. SysEx and MIDI files may be saved (by a fill that presses Save; many editors back up only as `.syx`) but
+  never opened or imported, since they can carry firmware.
 - `host.ps1` is one long-lived Windows PowerShell process the tools talk to over JSON lines (`host.ts` starts it), so
   no native npm module is needed. It saves shots only as `.png` files under the capture's shot folder.

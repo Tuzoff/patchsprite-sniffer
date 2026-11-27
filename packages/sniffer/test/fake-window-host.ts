@@ -15,6 +15,7 @@ export function fakeWindowHost(over: Partial<WindowHost>): WindowHost {
     keys: no("keys"),
     type: no("type"),
     element: no("element"),
+    focused: async () => ({ found: false }),
     dialogs: no("dialogs"),
     fill: no("fill"),
     close() {},

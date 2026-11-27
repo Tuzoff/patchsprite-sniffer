@@ -42,31 +42,42 @@ export interface FillDeps extends ReadDeps {
   allowedRoot: string;
 }
 
-/** Extensions a dialog fill refuses even inside the allowed folder: firmware, updates, programs and SysEx dumps,
- * which can carry firmware. */
+/** Extensions a dialog fill refuses even inside the allowed folder: firmware, updates and programs. */
 export const REFUSED_EXTENSIONS: readonly string[] = [
-  ".bin", ".fw", ".dfu", ".hex", ".img", ".upd", ".update", ".firmware", ".syx", ".mid",
+  ".bin", ".fw", ".dfu", ".hex", ".img", ".upd", ".update", ".firmware",
   ".exe", ".msi", ".msix", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".zip",
 ];
 
+/** SysEx and MIDI files can carry firmware, so they are refused for Open and import, but many editors save their
+ * backups only as these, so a save may write one. */
+export const SAVE_ONLY_EXTENSIONS: readonly string[] = [".syx", ".mid"];
+
+/** A fill saves when the button it presses says Save; the title alone doesn't count, since an Open dialog may be
+ * titled "Open saved backup". */
+export const isSave = (button: string): boolean => /save/i.test(button);
+
 /** Refuses a dialog path outside `root` or with a refused extension; returns the resolved path. */
-export function checkDialogPath(root: string, path: string): string {
+export function checkDialogPath(root: string, path: string, save = false): string {
   if (/[\r\n]/.test(path)) throw new InputError("a path is one line");
   // Characters no Windows file name holds: a dialog's box reads quotes as a list of files and * ? as a filter.
   if (/["*?<>|]/.test(path)) throw new InputError('a dialog path may not hold " * ? < > or |');
   if (!isAbsolute(path)) throw new InputError("give the dialog a full path, inside the capture's folder");
   const full = resolve(path);
   const rel = relative(resolve(root), full);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+  if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new InputError(`a dialog may only be pointed inside the capture's folder (${resolve(root)}), so nothing else on the computer can be opened or overwritten`);
   }
+  // Below the folder, a tilde can name a file by its short 8.3 name ("UPDATE~1.FIR"), whose extension isn't the
+  // file's own. (The folder itself may well be a short name, such as a temp folder under RUNNER~1.)
+  if (rel.includes("~")) throw new InputError("a dialog path may not hold ~ below the capture's folder: a short 8.3 name can hide a file's extension");
   // Windows drops a name's trailing dots and spaces ("update.bin." opens update.bin) and reads "name:stream" as a
   // stream of that file, so neither can hide an extension.
   if (full.split(/[\\/]/).some((seg) => /[. ]$/.test(seg)) || full.replace(/^[a-z]:/i, "").includes(":")) {
     throw new InputError("a dialog path may not end a name in a dot or space, or hold a colon after the drive");
   }
   const ext = extname(full).toLowerCase();
-  if (REFUSED_EXTENSIONS.includes(ext)) throw new InputError(`a dialog fill never uses a ${ext} file: firmware, updates, programs and SysEx files are refused`);
+  if (REFUSED_EXTENSIONS.includes(ext)) throw new InputError(`a dialog fill never uses a ${ext} file: firmware, updates and programs are refused`);
+  if (!save && SAVE_ONLY_EXTENSIONS.includes(ext)) throw new InputError(`a ${ext} file may be saved, never opened or imported: it can carry firmware`);
   return full;
 }
 
@@ -77,7 +88,7 @@ export async function fillDialog(d: FillDeps, title: string, path: string, butto
   // Every #32770 window of the editor counts as a dialog, its own ones too, so a fill never presses a button that
   // a click would need the user's say-so for.
   if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}": ask the user, and press it with editor_input if they say yes`);
-  const full = checkDialogPath(d.allowedRoot, path);
+  const full = checkDialogPath(d.allowedRoot, path, isSave(button));
   await d.beforeInput();
   const win = await editorWindow(d.host, d.app);
   const res: FillResult = await d.host.fill(win.pid, title, full, button);
