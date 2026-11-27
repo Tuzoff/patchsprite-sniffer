@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "declaration": false,
+    "rootDir": ".",
+    "outDir": "dist/bin-build"
+  },
+  "include": ["bin"]
+}

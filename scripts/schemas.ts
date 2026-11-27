@@ -1,6 +1,7 @@
 // The JSON Schema files the repo publishes, generated from the engine's zod schemas.
 
 import { z } from "zod";
+import { CAPTURE_VERSION, CaptureHeaderSchema, CaptureRecordSchema } from "../packages/engine/src/capture.ts";
 import { MAP_CHECK_RECORD_VERSION, MAP_CHECK_STATE_VERSION, MapCheckRecordSchema, MapCheckStateSchema } from "../packages/engine/src/map-check-record.ts";
 import { ProtocolSchema } from "../packages/engine/src/protocol-schema.ts";
 import { SEED_PATCH_VERSION, SeedPatchSchema } from "../packages/engine/src/seed-patch.ts";
@@ -28,6 +29,13 @@ export function schemaFiles(): Record<string, string> {
     description:
       "A device map's protocol.json. Format: docs/formats/device-map.md. The cross-checks this schema can't state (cmds that clash, layouts that don't fit, limits across firmwares) are in parseDeviceMap (packages/engine/src/protocol-schema.ts).",
   };
+  const captureLine = {
+    ...jsonSchema(z.union([CaptureHeaderSchema, CaptureRecordSchema])),
+    $id: `${ID}/capture-line.v${CAPTURE_VERSION}.schema.json`,
+    title: "Patchsprite capture line",
+    description:
+      "One line of a capture file (JSON Lines): the header on the first line, a record on every other. Format: docs/formats/capture.md. Rules across lines are in parseCapture (packages/engine/src/capture.ts).",
+  };
   const record = {
     ...jsonSchema(MapCheckRecordSchema),
     $id: `${ID}/map-check-record.v${MAP_CHECK_RECORD_VERSION}.schema.json`,
@@ -42,6 +50,7 @@ export function schemaFiles(): Record<string, string> {
   };
   return {
     [`seed-patch.v${SEED_PATCH_VERSION}.schema.json`]: text(seedPatch),
+    [`capture-line.v${CAPTURE_VERSION}.schema.json`]: text(captureLine),
     "device-map.v1.schema.json": text(deviceMap),
     [`map-check-record.v${MAP_CHECK_RECORD_VERSION}.schema.json`]: text(record),
     [`map-check-state.v${MAP_CHECK_STATE_VERSION}.schema.json`]: text(state),

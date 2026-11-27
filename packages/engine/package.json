@@ -1,7 +1,7 @@
 {
   "name": "@patchsprite/engine",
   "version": "0.1.0",
-  "description": "Device maps for MIDI and SysEx devices: the map schema, a generic codec and framing engines (browser-safe), with map loading and an RtMidi transport for Node.",
+  "description": "Device maps for MIDI and SysEx devices: the map schema, a generic codec and framing engines (browser-safe), with map loading, the pedal lock and an RtMidi transport for Node.",
   "type": "module",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -21,15 +21,30 @@
       "types": "./dist/node/index.d.ts",
       "node": "./dist/node/index.js"
     },
-    "./seed-patch": {
-      "types": "./dist/seed-patch.d.ts",
-      "default": "./dist/seed-patch.js"
-    },
     "./canonical-json": {
       "types": "./dist/canonical-json.d.ts",
       "default": "./dist/canonical-json.js"
     },
+    "./capture": {
+      "types": "./dist/capture.d.ts",
+      "default": "./dist/capture.js"
+    },
+    "./data-dir": {
+      "types": "./dist/data-dir.d.ts",
+      "node": "./dist/data-dir.js"
+    },
+    "./pedal-lock": {
+      "types": "./dist/pedal-lock.d.ts",
+      "node": "./dist/pedal-lock.js"
+    },
+    "./seed-patch": {
+      "types": "./dist/seed-patch.d.ts",
+      "default": "./dist/seed-patch.js"
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "pedal-lock": "./dist/bin/pedal-lock.js"
   },
   "files": [
     "dist",

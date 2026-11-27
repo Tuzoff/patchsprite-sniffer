@@ -8,6 +8,7 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 
 ## Formats
 
+- [Capture](docs/formats/capture.md): what the sniffer records in one session, as JSON Lines: every MIDI message both ways with its time, and the marked steps.
 - [Device map](docs/formats/device-map.md): the protocol section of a device map (`schemas/device-map.v1.schema.json`), which the engine reads.
 - [Seed patch](docs/formats/seed-patch.md) (proposal): changes a unit's evidence makes to a seed device map, one change per entry, each with its evidence.
 

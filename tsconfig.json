@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["packages/*/src", "packages/*/test", "packages/*/scripts", "scripts"]
+  "include": ["packages/*/src", "packages/*/bin", "packages/*/test", "packages/*/scripts", "scripts"]
 }
