@@ -40,7 +40,8 @@ const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** A shot name made safe for a file name: lower case, letters, digits and dashes, at most 60 characters. */
 export function shotFileName(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  // Runs of anything else become one dash, then the dashes at either end go (split and join: no backtracking regex).
+  const slug = name.toLowerCase().split(/[^a-z0-9]/).filter(Boolean).join("-").slice(0, 60).replace(/-$/, "");
   if (!slug) throw new ShotError("a shot needs a name with a letter or digit");
   return `${slug}.png`;
 }
