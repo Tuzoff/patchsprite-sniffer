@@ -1,0 +1,14 @@
+{
+  "name": "@patchsprite/sniffer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    "./walk/shot": "./src/walk/shot.ts",
+    "./walk/host": "./src/walk/host.ts"
+  }
+}
