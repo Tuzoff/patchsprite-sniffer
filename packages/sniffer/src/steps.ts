@@ -55,6 +55,8 @@ export class Steps {
   private nextId = 1;
   private open?: { start: StepStart; messages: MidiRecord[] };
   private lastCounted = 0;
+  /** An end or the idle recording is under way: nothing else may begin or end a step meanwhile. */
+  private busy?: "ending" | "idle";
 
   constructor(o: StepsOptions) {
     this.o = { now: Date.now, settleMs: 600, maxMs: 8000, pollMs: 50, ...o };
@@ -88,6 +90,7 @@ export class Steps {
    * apart from the label.
    */
   begin(kind: StepStart["kind"], label: string, extra: { change?: Change; mode?: string; before?: string } = {}): number {
+    if (this.busy) throw new Error(this.busy === "idle" ? "the idle recording is still running" : "a step is still ending");
     if (this.open) throw new Error(`step ${this.open.start.id} is still open: end it first`);
     const change = extra.change ?? parseLabel(label);
     const start: StepStart = { type: "stepStart", t: this.o.now(), id: this.nextId, kind, label, ...(change ? { change } : {}), ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.before ? { before: extra.before } : {}) };
@@ -101,11 +104,19 @@ export class Steps {
    * action whose label never named its change is refused before anything is written: say what changed, then end it.
    */
   async end(extra: { label?: string; change?: Change; after?: string; note?: string; aborted?: boolean } = {}): Promise<StepResult> {
+    if (this.busy) throw new Error(this.busy === "idle" ? "the idle recording ends on its own" : "the step is already ending");
+    return this.ending(extra);
+  }
+
+  private async ending(extra: { label?: string; change?: Change; after?: string; note?: string; aborted?: boolean }): Promise<StepResult> {
     const open = this.open;
     if (!open) throw new Error("no step is open");
     const change = extra.change ?? (extra.label ? parseLabel(extra.label) : undefined) ?? open.start.change;
     if (open.start.kind === "action" && !change && !extra.aborted) throw new Error(`say what changed, as "control: before → after" (the label was "${extra.label ?? open.start.label}")`);
     let status: StepEnd["status"] = "aborted";
+    const was = this.busy;
+    this.busy ??= "ending";
+    try {
     if (!extra.aborted) {
       const started = open.start.t;
       for (;;) {
@@ -121,6 +132,9 @@ export class Steps {
         await sleep(this.o.pollMs);
       }
     }
+    } finally {
+      this.busy = was;
+    }
     const label = extra.label ?? (change && !open.start.change ? formatLabel(change) : undefined);
     const end: StepEnd = { type: "stepEnd", t: this.o.now(), id: open.start.id, status, ...(label ? { label } : {}), ...(change && !open.start.change ? { change } : {}), ...(extra.after ? { after: extra.after } : {}), ...(extra.note ? { note: extra.note } : {}) };
     this.o.write(end);
@@ -134,13 +148,18 @@ export class Steps {
    */
   async idle(ms = 10_000): Promise<string[]> {
     this.begin("idle", "editor idle");
-    const messages = this.open!.messages;
-    await sleep(ms);
-    const set = pollSetFrom(messages);
-    const polls = new Set([...(this.rules.polls ?? []), ...set]);
-    this.rules = { ...this.rules, polls: [...polls] };
-    // the step ends at once: its traffic is the poll set, none of which counted
-    await this.end();
-    return set;
+    this.busy = "idle";
+    try {
+      const messages = this.open!.messages;
+      await sleep(ms);
+      const set = pollSetFrom(messages);
+      const polls = new Set([...(this.rules.polls ?? []), ...set]);
+      this.rules = { ...this.rules, polls: [...polls] };
+      // the step ends at once: its traffic is the poll set, none of which counted
+      await this.ending({});
+      return set;
+    } finally {
+      this.busy = undefined;
+    }
   }
 }
