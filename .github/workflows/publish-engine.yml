@@ -1,0 +1,43 @@
+name: publish-engine
+
+# Publishes @patchsprite/engine to npm when a tag engine-v<version> is pushed, and on nothing else: no branch push, pull
+# request or schedule starts it. It must not run before the @patchsprite scope is claimed on npm and this workflow is
+# set as the package's trusted publisher there; until then, push no engine-v tag.
+#
+# npm trusted publishing: npm takes this run's GitHub OIDC token in place of a token, so the repo holds no secret (see
+# README), and `--provenance` links the package to this workflow run and commit.
+on:
+  push:
+    tags: ["engine-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          # npm 11.5 or newer does trusted publishing; Node 24 ships it
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: The tag names the package's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(node -p 'require("./packages/engine/package.json").version')"
+          if [ "$TAG" != "engine-v$version" ]; then
+            echo "::error::tag $TAG does not match @patchsprite/engine $version (expected engine-v$version)"
+            exit 1
+          fi
+      - run: npm publish --provenance --access public -w @patchsprite/engine
