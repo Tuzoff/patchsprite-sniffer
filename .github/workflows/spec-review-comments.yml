@@ -9,8 +9,9 @@ name: spec-review-comments
 # A label this token adds starts no workflow, so the spec-review check (which reads the labels as they are now) is then
 # re-run on the pull request's newest spec-review run.
 #
-# It reads only the comment and the pull request's number, and runs no code from any branch. Only comments by people
-# with write access count: in this public repo anyone can comment. No secrets: this repo's CI never gets any.
+# It reads only the comment and the pull request's number, and runs no code from any branch. Only comments by the
+# owner, organization members and collaborators count: in this public repo anyone can comment. No secrets: this
+# repo's CI never gets any.
 on:
   issue_comment:
     types: [created]
@@ -53,8 +54,11 @@ jobs:
                 echo "Added \"$label\"."
               else
                 # a label that isn't there answers 404, which is fine
-                gh api -X DELETE "repos/$repo/issues/$PR/labels/$(jq -rn --arg l "$label" '$l | @uri')" --silent 2>/dev/null || true
-                echo "Took off \"$label\"."
+                if gh api -X DELETE "repos/$repo/issues/$PR/labels/$(jq -rn --arg l "$label" '$l | @uri')" --silent 2>/dev/null; then
+                  echo "Took off \"$label\"."
+                else
+                  echo "\"$label\" wasn't on (or couldn't be taken off)."
+                fi
               fi
               changed=true
             fi

@@ -35,5 +35,5 @@ The CLA applies to every part of this repository, including the shared engine pa
   one label at a time, so two reviews answering at once never drop each other's.
 
 Issue and pull request text is public, and only titles and bodies are checked, for the plans above; comments are not
-read at all. Don't paste captures, SysEx dumps or vendor files into any of it. Use the sniffer's upload to share a
+checked. Don't paste captures, SysEx dumps or vendor files into any of it. Use the sniffer's upload to share a
 capture with us.
