@@ -656,10 +656,9 @@ function blockPins(maps: readonly Json[]): Set<string> {
     };
     for (const m of seen.get(n) ?? []) {
       // the layout a payload names, or the payload itself, and the layouts their packed tails read with
-      const own = typeof m.payload === "string" ? [m.payload, ...standIns("layouts", m.payload)] : [];
-      for (const l of own) named(l);
-      const shapes = typeof m.payload === "string" ? own.flatMap((l) => layouts.get(l) ?? []) : [m.payload];
-      for (const shape of shapes) for (const t of tailLayouts(shape)) named(t);
+      const own = typeof m.payload === "string" ? [m.payload, ...standIns("layouts", m.payload)] : undefined;
+      for (const l of own ?? []) named(l);
+      for (const shape of own ? own.flatMap((l) => layouts.get(l) ?? []) : [m.payload]) for (const t of tailLayouts(shape)) named(t);
     }
   };
   for (const b of blocked) pin(b);
@@ -718,15 +717,18 @@ const MAX_WEIGHED_ALONE = 64;
 const MAX_SEPARATION_NOTES = 8;
 
 /**
- * The messages an op at `segs` touches by name: a message, every message whose payload names a layout it touches, all
- * of them for a whole section or firmware delta, and what a mode puts in or takes the place of any of those.
+ * The messages an op at `segs` touches by name: a message, every message whose payload names a layout it touches or
+ * reads its packed tail with one, all of them for a whole section or firmware delta, and what a mode puts in or takes
+ * the place of any of those.
  */
 function touchedMessages(segs: readonly string[], maps: readonly Json[]): Set<string> {
   const own = segs[0] === "firmwares" ? (segs.length <= 2 ? ["messages"] : segs.slice(2)) : segs;
-  const tables = maps.flatMap((m) => {
-    const firmwares = at(m, ["firmwares"]);
-    return [at(m, ["messages"]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, ["messages"])) : [])].filter(isObject);
-  });
+  const sections = (key: string) =>
+    maps.flatMap((m) => {
+      const firmwares = at(m, ["firmwares"]);
+      return [at(m, [key]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, [key])) : [])].filter(isObject);
+    });
+  const tables = sections("messages");
   // mode stand-ins both ways: [kind, name, stand-in]
   const swaps = maps.flatMap((m) => {
     const use = at(m, ["modes", "use"]);
@@ -745,9 +747,18 @@ function touchedMessages(segs: readonly string[], maps: readonly Json[]): Set<st
     else for (const t of tables) for (const n of Object.keys(t)) out.add(n);
   } else if (own[0] === "layouts") {
     const layouts = own.length >= 2 ? alike("layouts", own[1]) : undefined;
+    const shared = sections("layouts");
+    // the layouts a payload reads: the one it names (and what stands in for it), and their packed tails' or its own
+    const reads = (payload: Json | undefined): string[] => {
+      if (typeof payload !== "string") return tailLayouts(payload);
+      const named = [...alike("layouts", payload)];
+      return [...named, ...named.flatMap((l) => shared.flatMap((t) => tailLayouts(Object.hasOwn(t, l) ? t[l] : undefined)))];
+    };
     for (const t of tables)
-      for (const [n, m] of Object.entries(t))
-        if (isObject(m) && typeof m.payload === "string" && (!layouts || layouts.has(m.payload))) for (const x of alike("messages", n)) out.add(x);
+      for (const [n, m] of Object.entries(t)) {
+        const r = isObject(m) ? reads(m.payload) : [];
+        if (r.length && (!layouts || r.some((l) => layouts.has(l)))) for (const x of alike("messages", n)) out.add(x);
+      }
   }
   return out;
 }

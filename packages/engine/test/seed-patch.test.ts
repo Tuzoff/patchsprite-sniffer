@@ -322,6 +322,17 @@ test("a change that could lift a block goes to review: the pins that tell a bloc
   assert.deepEqual(packedReasons(edit("layout/chunk", { op: "add", path: "/layouts/chunk/fields/1", value: { name: "more", type: "u8" } })), [LIFT]);
   // a header on a message away from the block's cmd is still no reason
   assert.deepEqual(packedReasons(edit("nameReply", { op: "add", path: "/messages/nameReply/header", value: "edit" })), []);
+  // a firmware's delta of a tail layout, and the tail of a layout a mode puts in place of a pinned payload
+  assert.deepEqual(packedReasons(edit("layout/record", { op: "add", path: "/firmwares/1.20/layouts/record", value: { fields: [] } })), [LIFT]);
+  packed.modes.use.live = { layouts: { scene: "sceneLive" } };
+  packed.layouts.sceneLive = { packed: { packing: "7bit", layout: "liveRecord" } };
+  packed.layouts.liveRecord = structuredClone(packed.layouts.record);
+  assert.deepEqual(packedReasons(edit("layout/liveRecord", { op: "replace", path: "/layouts/liveRecord/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  // a tail layout only an unpinned message reads is no reason
+  packed.layouts.other = { packed: { packing: "7bit", layout: "loose" } };
+  packed.layouts.loose = structuredClone(packed.layouts.record);
+  packed.messages.setOther = { cmd: "30", dir: "send", payload: "other" };
+  assert.deepEqual(packedReasons(edit("layout/loose", { op: "replace", path: "/layouts/loose/fields/0/const", value: 1, was: fingerprint(2) })), []);
 
   // away from the block's cmd, a payload or cmd repair is still not a review reason
   assert.deepEqual(reasons(rename), []);
@@ -726,6 +737,18 @@ test("with block separations from the caller, a change that may lift a block nam
   assert.deepEqual(reasons(edit("layout/sceneLive", { op: "replace", path: "/layouts/sceneLive/fields/0/const", value: 5, was: fingerprint(4) })), [
     "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
   ]);
+
+  // a layout a packed tail reads with touches the messages that read it, through a named layout or an inline payload
+  const tailed = structuredClone(base);
+  tailed.layouts.record = { fields: [{ name: "slot", type: "u8" }] };
+  tailed.layouts.scene.packed = { packing: "7bit", layout: "record" };
+  tailed.messages.factoryReset.payload.packed = { packing: "7bit", pieces: { layout: "chunk" } };
+  tailed.layouts.chunk = { fields: [{ name: "at", type: "u8" }] };
+  const tailReasons = (c: Change) => reviewReasons(withChanges(c), tailed, { separations }).map((r) => r.reason);
+  for (const l of ["record", "chunk"])
+    assert.deepEqual(tailReasons(edit(`layout/${l}`, { op: "add", path: `/layouts/${l}/maxSize`, value: 4 })), [
+      "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    ]);
 
   // at most eight notes for a change, however many of its ops write pins; names from the app go in on one line
   const many = (map: any): BlockSeparation[] => ["a\nb", ...Array.from({ length: 10 }, (_, i) => `s${i}`)].map((send) => ({ send, blocked: "factoryReset", by: "x" }));

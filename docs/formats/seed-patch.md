@@ -276,10 +276,10 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   `header` tell them apart. So a change to the `cmd`, `dir`, `payload` or `header` of a blocked message, or of a send
   or request whose cmd can be a blocked one's (placeholders match any byte), or to a layout such a payload names, or
   to the layout its packed tail is read with (`packed.layout` or `packed.pieces.layout`, in the named layout or the
-  inline payload), or to what a mode stands in for any of these, is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
-  counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
-  a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
-  whose payload another change edits. A caller may pass an optional function that gives a map's block separations
+  inline payload), or to what a mode stands in for any of these, is reviewed. That includes a firmware delta of one.
+  Since a reviewer may accept any subset of the changes, a message counts with every cmd, direction and payload it has
+  in the base map or in the map the whole patch leaves, so moving a send onto a blocked cmd counts even when another
+  change moves the block off it, and so does blocking a message whose payload another change edits. A caller may pass an optional function that gives a map's block separations
   (`reviewReasons(patch, map, { separations })`, each a send, the blocked message it shares a cmd with and what keeps
   them apart). The reason then names each pair the change touches and how its separation changes from the base map
   to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now
