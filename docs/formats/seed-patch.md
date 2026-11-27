@@ -284,7 +284,9 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now
   shares a blocked cmd ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that
   still holds. Without them, when the base map, that map or the whole patch's map doesn't load, or past the first 64
-  changes that may lift a block, the reason is the plain one;
+  changes that may lift a block, the reason is the plain one. Other subsets of three or more changes aren't weighed,
+  so a note is a guide for the reviewer, never a sign that the pair stays apart: the prefix still asks for review, and
+  the map checks run again when the accepted map loads;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together. A parameter's `default` isn't on this list: the map checks it at load against
   those limits, and it only says where a reset lands;
