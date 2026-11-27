@@ -5,8 +5,8 @@ name: spec-review
 # that only changes CI, the repo's tooling or the release process takes `spec-review: not needed` instead. Only
 # people with triage rights or more can label, so the labels are the reviewers' word.
 #
-# A spec-ok label counts only if it was added after the pull request's last push: a review covers the code it saw, so a push
-# after it asks both reviewers again (they add their label again once they have looked). A push is dated as in
+# A label counts only if it was added after the pull request's last push: a review, or a "not needed", covers the code
+# it saw, so a push after it asks again (the label is added again once someone has looked). A push is dated as in
 # scripts/gate-approval.ts: by the start of this pull request's latest unbroken streak of runs of this workflow on the
 # head (pushing A, then B, then A again dates A from its last push), or a later force-push, reopen, branch restore or
 # change of base branch. A label already on a pull request can't be added again, so a reviewer removes it and adds it.
@@ -37,13 +37,9 @@ jobs:
       - name: Both spec reviews said OK after the last push
         run: |
           set -euo pipefail
-          labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
+          # the labels now, not the event's: a re-run of an old run must not count a label taken off since
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.labels[].name')"
           has() { grep -qxF "$1" <<<"$labels"; }
-          # a CI or tooling pull request's label stays through its pushes, as no spec review read its code
-          if has "spec-review: not needed"; then
-            echo "No spec review needed (CI, tooling or release process only)."
-            exit 0
-          fi
           # only the fields used, in files: a run is about 14 KB, and one argument may hold at most 128 KB
           events="$RUNNER_TEMP/events.json"
           runs="$RUNNER_TEMP/runs.json"
@@ -66,6 +62,11 @@ jobs:
             jq -se --arg l "$1" --arg pushed "$pushed" \
               '[.[] | select(.event == "labeled" and .label == $l) | .created_at] | max > $pushed' "$events" >/dev/null
           }
+          # like the reviews, a "not needed" covers only the code it saw
+          if has "spec-review: not needed" && fresh "spec-review: not needed"; then
+            echo "No spec review needed (CI, tooling or release process only)."
+            exit 0
+          fi
           missing=""
           for l in "spec-ok: sniffer" "spec-ok: scope"; do
             if ! has "$l"; then
