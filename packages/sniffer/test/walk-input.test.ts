@@ -201,6 +201,9 @@ test("a key or typed text after other input waits for a dialog that input may ha
   const { host } = inputHost(0, {});
   await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: async (ms) => void waits.push(ms) }, ["key:ctrl+s", "type:x", "click:1,1", "wheel:1,1,1", "key:tab"].map(parseStep));
   assert.deepEqual(waits.filter((ms) => ms !== 50), [600, 600], "type after a key, and the key after the wheel that followed a click");
+  waits.length = 0;
+  await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: async (ms) => void waits.push(ms) }, ["key:ctrl+s", "wait:0", "type:x", "click:1,1", "wait:1", "key:tab"].map(parseStep));
+  assert.deepEqual(waits.filter((ms) => ms !== 50), [0, 600, 1000], "a wait shorter than the settle doesn't stand in for it; a longer one does");
 });
 
 test("no editor window: input is refused", async () => {

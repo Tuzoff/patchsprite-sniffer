@@ -128,13 +128,16 @@ export function toScreen(rect: Rect, scale: number, x: number, y: number): { x: 
 export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
   const scale = d.scale ?? 0.5;
   const sleep = d.sleep ?? wait;
+  const settle = d.dialogSettleMs ?? 600;
   let afterInput = false;
   for (const [n, step] of steps.entries()) {
     // A click or key may open a dialog, which takes a moment to show. Keys sent before then would queue up and land in
     // it unchecked, so they wait for it to appear and be seen by the dialog check.
-    if (afterInput && (step.op === "key" || step.op === "type")) await sleep(d.dialogSettleMs ?? 600);
-    // A wait step gives the dialog its time; a wheel step neither opens one nor gives it time.
-    if (step.op !== "wheel") afterInput = step.op !== "wait";
+    if (afterInput && (step.op === "key" || step.op === "type")) await sleep(settle);
+    // A wait step at least that long gives the dialog its time (a shorter one, such as wait:0, doesn't); a wheel step
+    // neither opens one nor gives it time.
+    if (step.op === "wait") afterInput &&= step.seconds * 1000 < settle;
+    else if (step.op !== "wheel") afterInput = true;
     if (step.op === "wait") {
       await sleep(step.seconds * 1000);
       continue;
