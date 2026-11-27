@@ -207,6 +207,9 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/payload/fields/1/allowed", value: [0, 1, 2], was: fingerprint([0, 1]) })), ["changes what may be written"]);
   assert.deepEqual(reasons(edit("transport", { op: "replace", path: "/transport/endian", value: "be", was: fingerprint("le") })), ["changes the framing of every message"]);
   assert.deepEqual(reasons(edit("session", { op: "add", path: "/session", value: { onConnect: ["editMode"] } })), ["changes what is sent on every connect"]);
+  // any change to the identity, even only a better source for it
+  assert.deepEqual(reasons(edit("identity", { op: "add", path: "/identity", value: { manufacturer: "7d", family: "01 02" } })), ["changes which unit the map drives (its identity)"]);
+  assert.deepEqual(reasons(edit("identity", { op: "add", path: "/identity/source", value: { kind: "capture", ref: "x" } })), ["changes which unit the map drives (its identity)"]);
   assert.deepEqual(reasons(edit("getPreset", { op: "add", path: "/messages/getPreset/agentNotes", value: "say it kindly" })), ["changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("safety", { op: "add", path: "/safety/notes", value: ["press nothing"] })), ["changes safety rules, blocked lists or hazards", "changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("cautions", { op: "add", path: "/cautions", value: ["the editor must be closed"] })), ["changes text a chat model reads"]);

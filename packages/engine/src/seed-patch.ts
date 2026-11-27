@@ -848,6 +848,8 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
       const onlyTiming = measured && ("value" in op ? isMeasured(op.value) : true) && (old === undefined || isMeasured(old));
       if ((segs[0] === "transport" || segs[0] === "addresses") && !onlyTiming) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
+      // the identity decides which unit the map drives at all, whatever the change's evidence
+      if (segs[0] === "identity") reasons.add("changes which unit the map drives (its identity)");
       if (segs[0] === "modes") reasons.add("changes which entries a mode uses");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
