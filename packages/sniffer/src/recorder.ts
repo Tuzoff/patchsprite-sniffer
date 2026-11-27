@@ -46,6 +46,7 @@ export class Recorder {
     editor: string;
     /** Why the capture stopped on its own, if it did. */
     failed?: string;
+    pending?: Promise<unknown>;
   };
 
   constructor(o: RecorderOptions) {
@@ -134,7 +135,7 @@ export class Recorder {
   async end(extra: { label?: string; note?: string; aborted?: boolean } = {}): Promise<StepResult & { selfTest?: SelfTestResult }> {
     const live = this.need();
     const kind = live.steps.openKind;
-    const r = await live.steps.end(extra);
+    const r = await this.waiting(live, live.steps.end(extra));
     if (kind !== "selfTest" || extra.aborted) return r;
     const selfTest = judgeSelfTest(r.messages);
     if (!selfTest.ok) await this.stop("selfTestFailed", selfTest.text);
@@ -142,13 +143,21 @@ export class Recorder {
   }
 
   async idle(seconds: number): Promise<string[]> {
-    return this.need().steps.idle(seconds * 1000);
+    const live = this.need();
+    return this.waiting(live, live.steps.idle(seconds * 1000));
+  }
+
+  /** A step ending or an idle recording that stop waits for, so it closes in the file before the session ends. */
+  private waiting<T>(live: NonNullable<Recorder["live"]>, p: Promise<T>): Promise<T> {
+    live.pending = p.catch(() => undefined);
+    return p;
   }
 
   /** Ends the session: closes any open step, writes the end record, and gives the pedal lock back. */
   async stop(reason: EndRecord["reason"] = "stopped", text?: string): Promise<string> {
     const live = this.need();
     this.live = undefined;
+    await live.pending; // a step's end is bounded by its timeout, an idle recording by its length
     live.stop.abort();
     try {
       await live.running;

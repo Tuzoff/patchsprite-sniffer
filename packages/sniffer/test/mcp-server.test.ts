@@ -133,6 +133,26 @@ test("a capture that fails on its own: the status says so, and stop ends the fil
   }
 });
 
+test("stop_capture while a step is still ending waits for it, so the step closes in the file before the end", async () => {
+  const { device, call } = await rig();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const { data } = await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0 });
+  const s = await device.nextSession();
+  for (let i = 0; i < 400 && !(await call("capture_status")).data?.attached; i++) await sleep(5);
+  await call("begin_step", { label: "Drive: off → on" });
+  exchange(s, "f0 7d 01 12 01 f7", "f0 7d 01 31 f7");
+  const ending = call("end_step");
+  await sleep(10); // the step waits 40 ms for quiet
+  const [ended, stopped] = await Promise.all([ending, call("stop_capture")]);
+  assert.equal(ended.error, false, ended.text);
+  assert.equal(stopped.error, false, stopped.text);
+  const c = parseCapture(readFileSync(data!.file as string, "utf8"));
+  assert.ok(c.ok);
+  const types = c.capture.records.map((r) => r.type);
+  assert.deepEqual(types.slice(-2), ["stepEnd", "end"]);
+  assert.equal(c.capture.end?.reason, "stopped");
+});
+
 test("someone else holding the device: start_capture refuses and creates nothing", async () => {
   const { env, call } = await rig();
   const other = acquirePedalLock("hardware check", { env });
