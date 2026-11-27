@@ -16,6 +16,14 @@ test("the agent only watches: it can't send to the device, open a port or take c
   assert.match(src, /\bsend\(o\)/);
 });
 
+test("the agent drops nothing: a call seen through two hooked DLLs reports once, by nesting, never by a time window", () => {
+  const src = winmmAgentSource().replace(/\/\/.*$/gm, "");
+  assert.doesNotMatch(src, /lastT|lastKey/, "no time-window dedupe");
+  assert.match(src, /function outermost\(/);
+  // every hook goes through it
+  assert.equal((src.match(/Interceptor\.attach\(/g) ?? []).length, (src.match(/Interceptor\.attach\([^,]+, outermost\(/g) ?? []).length);
+});
+
 test("agent reports become capture records, bytes spaced, the agent's time as hookT", () => {
   assert.deepEqual(agentRecord({ dir: "out", kind: "sysex", h: "0x1a2b", hex: "f07d01f7", t: 5 }, 9), { type: "midi", t: 9, hookT: 5, dir: "out", kind: "sysex", bytes: "f0 7d 01 f7", port: "0x1a2b" });
   assert.deepEqual(agentRecord({ dir: "in", kind: "sysexError", hex: "f07d", t: 9 }, 9), { type: "midi", t: 9, dir: "in", kind: "sysexError", bytes: "f0 7d" });
