@@ -50,8 +50,8 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which
   its screenshot can't show. A fill types the path into the dialog's file-name box and presses a button by caption.
   The path must be inside the capture's own `.files` folder (beside the capture, like `.shots`), so no other capture,
-  shot or file on the computer can be opened or saved over, and
-  firmware, update and program files are refused even there. SysEx and MIDI files may be saved (many editors
-  back up only as `.syx`) but never opened or imported, since they can carry firmware.
+  shot or file on the computer can be opened or saved over, and firmware, update and program files are refused even
+  there. SysEx and MIDI files may be saved (by a fill that presses Save; many editors back up only as `.syx`) but
+  never opened or imported, since they can carry firmware.
 - `host.ps1` is one long-lived Windows PowerShell process the tools talk to over JSON lines (`host.ts` starts it), so
   no native npm module is needed. It saves shots only as `.png` files under the capture's shot folder.

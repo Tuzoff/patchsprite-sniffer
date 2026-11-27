@@ -219,6 +219,7 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
   await fillDialog(d, "Save As", join(root, "backup.syx"), "Save");
   await fillDialog(d, "Export", join(root, "backup.syx"), "Save");
   assert.equal(filled, 2, "a backup may be saved as SysEx");
+  await assert.rejects(fillDialog(d, "Open saved backup", join(root, "backup.syx"), "Open"), /may be saved, never opened/, "the title alone doesn't make a save");
   await assert.rejects(fillDialog(d, "Save As", join(root, "x.bin"), "Save"), /\.bin file/);
   assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
   assert.equal(checkDialogPath(root, root), root, "a folder picker may be pointed at the folder itself");

@@ -34,6 +34,9 @@ export interface ShotResult {
 /** Input either landed (done) or was refused because the point or the window in front isn't the editor's. */
 export type InputResult = { done: true } | { done: false; owner: string };
 
+/** A UI Automation lookup: the element, when it is the editor's. */
+export type ElementResult = { found: false } | { found: true; element: UiElement };
+
 export interface UiElement {
   name: string;
   controlType: string;
@@ -72,9 +75,9 @@ export interface WindowHost {
   keys(pid: number, vks: number[]): Promise<InputResult>;
   type(pid: number, text: string): Promise<InputResult>;
   /** The UI Automation element at a point, when it is the editor's. */
-  element(pid: number, x: number, y: number): Promise<{ found: false } | { found: true; element: UiElement }>;
+  element(pid: number, x: number, y: number): Promise<ElementResult>;
   /** The UI Automation element that has the keyboard focus, when it is the editor's. */
-  focused(pid: number): Promise<{ found: false } | { found: true; element: UiElement }>;
+  focused(pid: number): Promise<ElementResult>;
   /** The editor's standard Windows file and folder dialogs. */
   dialogs(pid: number): Promise<{ dialogs: DialogInfo[] }>;
   /** Types a path into a dialog's edit box and presses the button with that caption. */
@@ -170,11 +173,11 @@ export class PowerShellHost implements WindowHost {
   }
 
   async element(pid: number, x: number, y: number) {
-    return (await this.#call("element", { pid, x, y })) as unknown as { found: false } | { found: true; element: UiElement };
+    return (await this.#call("element", { pid, x, y })) as unknown as ElementResult;
   }
 
   async focused(pid: number) {
-    return (await this.#call("focused", { pid })) as unknown as { found: false } | { found: true; element: UiElement };
+    return (await this.#call("focused", { pid })) as unknown as ElementResult;
   }
 
   async dialogs(pid: number) {
