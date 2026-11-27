@@ -34,7 +34,7 @@ test("the window host finds, fronts and shoots a real window at half size", asyn
   t.diagnostic(`tries ${shot.tries}, window ${shot.window.width}x${shot.window.height}`);
 
   // Type into Notepad, read its text box back through UI Automation, then save through the file-dialog helper.
-  const deps = { host, app: "notepad.exe", beforeInput: async () => {}, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
+  const deps = { host, app: "notepad.exe", allowedRoot: dir, beforeInput: async () => {}, sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) };
   const mid = { x: Math.round(shot.width / 2), y: Math.round(shot.height / 2) };
   await runSteps(deps, [parseStep(`click:${mid.x},${mid.y}`), parseStep("type:walk tools ok")]);
   const box = await readControl(deps, mid.x, mid.y);

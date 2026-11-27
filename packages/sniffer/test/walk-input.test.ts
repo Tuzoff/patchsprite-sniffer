@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { InputResult, WindowHost } from "../src/walk/host.ts";
 import { InputError, keyCodes, parseStep, runSteps, toScreen } from "../src/walk/input.ts";
-import { fillDialog, listDialogs, readControl } from "../src/walk/read.ts";
+import { checkDialogPath, fillDialog, listDialogs, readControl } from "../src/walk/read.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeWindowHost } from "./fake-window-host.ts";
 
 const RECT = { left: 100, top: 50, width: 1600, height: 900 };
@@ -31,6 +33,7 @@ function inputHost(covered = 0, over: Partial<WindowHost> = {}) {
     drag: async (pid, x, y, x1, y1, steps, hold) => answer(`drag ${pid} ${x},${y} ${x1},${y1} ${steps} ${hold}`),
     keys: async (pid, vks) => answer(`keys ${pid} ${vks.join(",")}`),
     type: async (pid, t) => answer(`type ${pid} ${t}`),
+    element: async () => ({ found: false }),
     ...over,
   });
   return { host, log };
@@ -104,6 +107,22 @@ test("a point that stays covered is refused with the other window's title, and l
   assert.equal(log.filter((l) => l.includes("2,2") || l.includes("104,54")).length, 0);
 });
 
+test("a click on a firmware, reset or store control is refused until the user approves it", async () => {
+  const named = (name: string) => async () => ({ found: true as const, element: { name, controlType: "Button", automationId: "", className: "", enabled: true, rect: RECT } });
+  for (const name of ["Firmware Update", "Factory Reset", "Store", "Delete preset", "Sign in"]) {
+    const { host, log } = inputHost(0, { element: named(name) });
+    await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /refused: it would press .*Ask the user first/, name);
+    assert.equal(log.filter((l) => l.startsWith("click")).length, 0, name);
+    await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved: true }, [parseStep("click:1,1")]);
+    assert.equal(log.filter((l) => l.startsWith("click")).length, 1, name);
+  }
+  for (const name of ["Gain", "Storage"]) {
+    const { host, log } = inputHost(0, { element: named(name) });
+    await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]);
+    assert.equal(log.filter((l) => l.startsWith("click")).length, 1, name);
+  }
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);
@@ -134,10 +153,11 @@ test("the file-dialog helper lists the editor's dialogs and fills one after the 
   });
   assert.deepEqual(await listDialogs({ host, app: "Editor.exe" }), [{ title: "Save As", edits: ["File name:"], buttons: ["Save", "Cancel"] }]);
   let locked = false;
-  const remaining = await fillDialog({ host, app: "Editor.exe", beforeInput: async () => void (locked = true) }, "Save As", "C:\\walk\\backup.bin", "Save");
+  const root = join(tmpdir(), "walk-capture");
+  const remaining = await fillDialog({ host, app: "Editor.exe", allowedRoot: root, beforeInput: async () => void (locked = true) }, "Save As", join(root, "backup.prst"), "Save");
   assert.ok(locked);
   assert.deepEqual(remaining, []);
-  assert.deepEqual(calls, ["fill 42 Save As C:\\walk\\backup.bin Save"]);
+  assert.deepEqual(calls, [`fill 42 Save As ${join(root, "backup.prst")} Save`]);
 });
 
 test("a dialog fill that can't find its dialog or button says what is open", async () => {
@@ -146,6 +166,27 @@ test("a dialog fill that can't find its dialog or button says what is open", asy
     dialogs: async () => ({ dialogs: [{ title: "Open", edits: [], buttons: [] }] }),
     fill: async () => ({ done: false, why: "0 dialogs titled 'Save As'" }),
   });
-  await assert.rejects(fillDialog({ host, app: "Editor.exe", beforeInput: async () => {} }, "Save As", "x", "Save"), /0 dialogs titled 'Save As'\. Open dialogs: "Open"/);
-  await assert.rejects(fillDialog({ host, app: "Editor.exe", beforeInput: async () => {} }, "Save As", "a\nb", "Save"), /one line/);
+  const root = join(tmpdir(), "walk-capture");
+  await assert.rejects(fillDialog({ host, app: "Editor.exe", allowedRoot: root, beforeInput: async () => {} }, "Save As", join(root, "x.prst"), "Save"), /0 dialogs titled 'Save As'\. Open dialogs: "Open"/);
+  await assert.rejects(fillDialog({ host, app: "Editor.exe", allowedRoot: root, beforeInput: async () => {} }, "Save As", join(root, "a\nb"), "Save"), /one line/);
+});
+
+test("a dialog is pointed only inside the capture's folder, and never at firmware, updates or programs", async () => {
+  let filled = 0;
+  const host = fakeWindowHost({ find: async () => WIN, fill: async () => (filled++, { done: true, remaining: [] }) });
+  const root = join(tmpdir(), "walk-capture");
+  const d = { host, app: "Editor.exe", allowedRoot: root, beforeInput: async () => {} };
+  for (const [path, why] of [
+    [join(root, "..", "elsewhere.prst"), /inside the capture's folder/],
+    [join(tmpdir(), "user-presets", "mine.prst"), /inside the capture's folder/],
+    [root, /inside the capture's folder/],
+    ["relative.prst", /full path/],
+    [join(root, "update.BIN"), /\.bin file/],
+    [join(root, "fw.syx"), /\.syx file/],
+    [join(root, "setup.exe"), /\.exe file/],
+  ] as const) {
+    await assert.rejects(fillDialog(d, "Open", path, "Open"), why, path);
+  }
+  assert.equal(filled, 0);
+  assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
 });

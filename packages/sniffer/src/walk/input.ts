@@ -23,6 +23,11 @@ export const KEYS: Readonly<Record<string, number>> = {
 
 export class InputError extends Error {}
 
+/** Controls a click never reaches without the user's say-so: firmware and updates, factory reset, storing or
+ * deleting presets, accounts, uploads. Matched on the control's name as Windows UI Automation reports it; an editor
+ * that draws its own controls hides them from it, so the walk prompt's guardrails still apply. */
+export const HAZARD = /firmware|update|upgrade|factory|reset|initiali[sz]e|restore|\bstore\b|delete|erase|format|sign[ -]?in|log[ -]?in|account|upload|download|cloud|share/i;
+
 /** The virtual-key codes of a combination such as "ctrl+z". */
 export function keyCodes(combo: string): number[] {
   const names = combo.toLowerCase().split("+").map((k) => k.trim());
@@ -85,6 +90,8 @@ export interface InputDeps {
   beforeInput: () => Promise<void>;
   /** The screenshots' scale (shot.ts; default 0.5). */
   scale?: number;
+  /** The user has approved clicking a control whose name matches HAZARD, for this call only. */
+  hazardApproved?: boolean;
   /** How long a covered point is retried before the input is refused, in ms (default 30 s). */
   coveredTimeoutMs?: number;
   /** Wait between those tries, in ms (default 1 s). */
@@ -123,6 +130,7 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
       // Look the window up again on every try: the editor may have moved or come back to the front.
       const win = await editorWindow(d.host, d.app);
       await d.host.front(win.hwnd);
+      if (!d.hazardApproved && (step.op === "click" || step.op === "dclick" || step.op === "rclick")) await refuseHazard(d.host, win, scale, step, n);
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
       if (Date.now() >= deadline) {
@@ -131,6 +139,14 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
       await sleep(d.retryMs ?? 1000);
     }
     await sleep(50);
+  }
+}
+
+async function refuseHazard(host: WindowHost, win: FoundWindow, scale: number, step: { op: string; x: number; y: number }, n: number) {
+  const p = toScreen(win.rect, scale, step.x, step.y);
+  const at = await host.element(win.pid, p.x, p.y);
+  if (at.found && HAZARD.test(at.element.name)) {
+    throw new InputError(`step ${n + 1} (${step.op}) refused: it would press "${at.element.name}", which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
   }
 }
 

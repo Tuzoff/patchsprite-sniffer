@@ -3,6 +3,7 @@
 // capture names the editor, holds the pedal lock for the whole session and records what every input makes the
 // editor send. Shots are saved beside the capture, in a folder of its own.
 import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 import type { RegisterTools } from "../mcp/server.ts";
 import type { Recorder } from "../recorder.ts";
@@ -43,7 +44,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
         current?.host.close();
         current = { file, host: makeHost(shotsDir(file)) };
       }
-      return { app, host: current.host, dir: shotsDir(file) };
+      return { app, host: current.host, dir: shotsDir(file), files: dirname(file) };
     };
     // The capture holds the pedal lock from start to stop; input needs it still running at the moment it is sent.
     const beforeInput = async () => {
@@ -78,15 +79,18 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     server.registerTool(
       "editor_input",
       {
-        description: "Input to the editor, at points on the latest editor_screenshot. Steps run in order: click:X,Y dclick:X,Y rclick:X,Y wheel:X,Y,N drag:X,Y,X1,Y1 slowdrag:X,Y,X1,Y1 key:enter (or esc, tab, delete, ctrl+z, a letter...) type:TEXT wait:S. Input lands only on the editor's windows: a point covered by another window is retried for 30 s, then refused. Use it inside a step (begin_step, input, end_step) so the change is labelled.",
-        inputSchema: { steps: z.array(z.string().min(1).max(500)).min(1).max(30) },
+        description: "Input to the editor, at points on the latest editor_screenshot. Steps run in order: click:X,Y dclick:X,Y rclick:X,Y wheel:X,Y,N drag:X,Y,X1,Y1 slowdrag:X,Y,X1,Y1 key:enter (or esc, tab, delete, ctrl+z, a letter...) type:TEXT wait:S. Input lands only on the editor's windows: a point covered by another window is retried for 30 s, then refused. Use it inside a step (begin_step, input, end_step) so the change is labelled. A click on a control named like firmware, update, reset, store, delete or account is refused until the user says yes.",
+        inputSchema: {
+          steps: z.array(z.string().min(1).max(500)).min(1).max(30),
+          hazardApproved: z.boolean().default(false).describe("true only when the user has just said yes to pressing a refused control (firmware, update, reset, store, delete, account): this call only"),
+        },
         annotations: input,
       },
-      async ({ steps }) => {
+      async ({ steps, hazardApproved }) => {
         try {
           const s = session(recorder);
           const parsed = steps.map(parseStep);
-          await runSteps({ host: s.host, app: s.app, beforeInput, scale, sleep: o.sleep }, parsed);
+          await runSteps({ host: s.host, app: s.app, beforeInput, scale, sleep: o.sleep, hazardApproved }, parsed);
           return text(`Done: ${steps.length} step${steps.length === 1 ? "" : "s"}.`);
         } catch (e) {
           return refused(e);
@@ -133,14 +137,14 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     server.registerTool(
       "fill_dialog",
       {
-        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. Only for files the walk plan names, such as a backup, never an import of the user's files.",
+        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. The path must be inside the capture's folder (shown by capture_status), so nothing else can be opened or saved over; firmware, update, program and SysEx files are refused.",
         inputSchema: { title: z.string().min(1).max(200), path: z.string().min(1).max(1024), button: z.string().min(1).max(100) },
         annotations: input,
       },
       async ({ title, path, button }) => {
         try {
           const s = session(recorder);
-          const left = await fillDialog({ host: s.host, app: s.app, scale, beforeInput }, title, path, button);
+          const left = await fillDialog({ host: s.host, app: s.app, scale, beforeInput, allowedRoot: s.files }, title, path, button);
           return text(left.length ? `Done. Still open: ${left.map((t) => JSON.stringify(t)).join(", ")}.` : "Done. No dialog is open now.", { remaining: left });
         } catch (e) {
           return refused(e);

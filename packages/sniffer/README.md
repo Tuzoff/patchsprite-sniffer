@@ -37,10 +37,14 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
 - `editor_input` (`input.ts`): click, double-click, right-click, wheel, drag, keys and typed text, at points on the
   latest shot. Input lands only on the editor's own windows: a point covered by another window (a chat app's
   overlay, say) is retried for 30 s and then refused, and keys are sent only while one of the editor's windows is in
-  front.
+  front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
+  refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
+  controls hide their names, so the walk prompt's guardrails still apply there.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which
   its screenshot can't show. A fill types the path into the dialog's file-name box and presses a button by caption.
+  The path must be inside the capture's folder, so nothing else on the computer can be opened or saved over, and
+  firmware, update, program and SysEx files are refused even there.
 - `host.ps1` is one long-lived Windows PowerShell process the tools talk to over JSON lines (`host.ts` starts it), so
   no native npm module is needed. It saves shots only as `.png` files under the capture's shot folder.

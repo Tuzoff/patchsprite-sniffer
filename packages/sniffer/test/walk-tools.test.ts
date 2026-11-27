@@ -97,9 +97,13 @@ test("during a capture: a shot of the capture's editor beside the capture, then 
   assert.equal((ctl.data!.control as { value: string }).value, "-6.0");
 
   assert.match((await call("list_dialogs")).text, /Save As/);
-  const filled = await call("fill_dialog", { title: "Save As", path: "C:\\backup\\walk.bin", button: "Save" });
+  const backup = join(dirname(file), "walk-backup.prst");
+  const filled = await call("fill_dialog", { title: "Save As", path: backup, button: "Save" });
   assert.equal(filled.error, false, filled.text);
-  assert.ok(log.includes("fill Save As C:\\backup\\walk.bin Save"));
+  assert.ok(log.includes(`fill Save As ${backup} Save`));
+  const outside = await call("fill_dialog", { title: "Open", path: join(tmpdir(), "firmware.prst"), button: "Open" });
+  assert.equal(outside.error, true);
+  assert.match(outside.text, /inside the capture's folder/);
 
   await recorder.stop();
   const after = await call("editor_input", { steps: ["click:1,1"] });
