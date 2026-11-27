@@ -685,59 +685,90 @@ export interface ReviewOptions {
 /** At most this many separation notes per change; the rest are counted. */
 const MAX_SEPARATION_NOTES = 8;
 
-/** The messages an op at `segs` touches by name: a message, or every message whose payload names a layout it touches. */
+/**
+ * The messages an op at `segs` touches by name: a message, every message whose payload names a layout it touches, all
+ * of them for a whole section or firmware delta, and what a mode puts in or takes the place of any of those.
+ */
 function touchedMessages(segs: readonly string[], maps: readonly Json[]): Set<string> {
-  const own = segs[0] === "firmwares" ? segs.slice(2) : segs;
+  const own = segs[0] === "firmwares" ? (segs.length <= 2 ? ["messages"] : segs.slice(2)) : segs;
+  const tables = maps.flatMap((m) => {
+    const firmwares = at(m, ["firmwares"]);
+    return [at(m, ["messages"]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, ["messages"])) : [])].filter(isObject);
+  });
+  // mode stand-ins both ways: [kind, name, stand-in]
+  const swaps = maps.flatMap((m) => {
+    const use = at(m, ["modes", "use"]);
+    return (isObject(use) ? Object.values(use) : []).flatMap((u) =>
+      (["messages", "layouts"] as const).flatMap((kind) => {
+        const t = isObject(u) ? u[kind] : undefined;
+        return isObject(t) ? Object.entries(t).flatMap(([n, v]) => (typeof v === "string" ? [[kind, n, v] as const] : [])) : [];
+      }),
+    );
+  });
+  const alike = (kind: "messages" | "layouts", name: string) =>
+    new Set([name, ...swaps.flatMap(([k, n, v]) => (k !== kind ? [] : n === name ? [v] : v === name ? [n] : []))]);
   const out = new Set<string>();
-  const all = (key: "messages") =>
-    maps.flatMap((m) => {
-      const firmwares = at(m, ["firmwares"]);
-      return [at(m, [key]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, [key])) : [])].filter(isObject);
-    });
   if (own[0] === "messages") {
-    if (own.length >= 2) out.add(own[1]);
-    else for (const t of all("messages")) for (const n of Object.keys(t)) out.add(n);
-  } else if (own[0] === "layouts")
-    for (const t of all("messages"))
-      for (const [n, m] of Object.entries(t)) if (isObject(m) && typeof m.payload === "string" && (own.length < 2 || m.payload === own[1])) out.add(n);
+    if (own.length >= 2) for (const n of alike("messages", own[1])) out.add(n);
+    else for (const t of tables) for (const n of Object.keys(t)) out.add(n);
+  } else if (own[0] === "layouts") {
+    const layouts = own.length >= 2 ? alike("layouts", own[1]) : undefined;
+    for (const t of tables)
+      for (const [n, m] of Object.entries(t))
+        if (isObject(m) && typeof m.payload === "string" && (!layouts || layouts.has(m.payload))) for (const x of alike("messages", n)) out.add(x);
+  }
   return out;
 }
+
+/** A name or separation from the app, as it goes into reason text: one line, no control or direction marks, bounded. */
+const shown = (s: string, max = 80): string => {
+  const t = s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "?");
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+};
 
 /**
  * The separations before and after the whole patch, as notes for the messages a change touches: a pair that is new
  * means the patch puts a send beside a blocked message, a changed `by` means a separation moved, a pair that is gone
  * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
- * them apart. Null when either map's separations can't be had.
+ * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
+ * since an unnamed pair holds on every firmware that doesn't say otherwise. Undefined when either map's separations
+ * can't be had.
  */
 function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): ((names: Set<string>) => string[]) | undefined {
-  let before: readonly BlockSeparation[];
-  let after: readonly BlockSeparation[];
+  const key = (s: { firmware?: string; send: string; blocked: string }) => [s.firmware ?? "", s.send, s.blocked].join(SEP);
+  const ok = (s: unknown): s is BlockSeparation =>
+    isObject(s) && typeof s.send === "string" && typeof s.blocked === "string" && typeof s.by === "string" && (s.firmware === undefined || typeof s.firmware === "string");
+  let was: Map<string, BlockSeparation>;
+  let now: Map<string, BlockSeparation>;
   try {
-    before = separations(base);
-    after = separations(patched);
+    const table = (map: unknown) => {
+      const list: unknown = separations(map);
+      if (!Array.isArray(list) || !list.every(ok)) throw new Error("not a list of separations");
+      return new Map(list.map((s) => [key(s), s]));
+    };
+    was = table(base);
+    now = table(patched);
   } catch {
     return undefined;
   }
-  const key = (s: BlockSeparation) => [s.firmware ?? "", s.send, s.blocked].join(SEP);
-  const was = new Map(before.map((s) => [key(s), s]));
-  const now = new Map(after.map((s) => [key(s), s]));
-  const on = (s: BlockSeparation) => (s.firmware ? ` on ${s.firmware}` : "");
+  const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => t.get(key(s)) ?? (s.firmware ? t.get(key({ send: s.send, blocked: s.blocked })) : undefined);
+  const on = (s: BlockSeparation) => (s.firmware ? ` on ${shown(s.firmware)}` : "");
   return (names) => {
     const notes: string[] = [];
     for (const k of new Set([...was.keys(), ...now.keys()])) {
-      const a = was.get(k);
-      const b = now.get(k);
-      const s = (b ?? a)!;
+      const s = (now.get(k) ?? was.get(k))!;
       if (!names.has(s.send) && !names.has(s.blocked)) continue;
+      const a = find(was, s);
+      const b = find(now, s);
+      const [send, blocked] = [shown(s.send), shown(s.blocked)];
       notes.push(
-        !a ? `${s.send} now shares a cmd with the blocked ${s.blocked}${on(s)}, kept apart only by ${s.by}`
-        : !b ? `${s.send} is no longer kept apart from the blocked ${s.blocked}${on(s)} (was ${s.by})`
-        : a.by !== b.by ? `what keeps ${s.send} apart from the blocked ${s.blocked}${on(s)} moves from ${a.by} to ${b.by}`
-        : `${s.send} is kept apart from the blocked ${s.blocked}${on(s)} by ${s.by}`,
+        !a ? `${send} now shares a cmd with the blocked ${blocked}${on(s)}, kept apart only by ${shown(b!.by)}`
+        : !b ? `${send} no longer shares a cmd with the blocked ${blocked}${on(s)} (was kept apart by ${shown(a.by)})`
+        : a.by !== b.by ? `what keeps ${send} apart from the blocked ${blocked}${on(s)} moves from ${shown(a.by)} to ${shown(b.by)}`
+        : `${send} is kept apart from the blocked ${blocked}${on(s)} by ${shown(b.by)}`,
       );
     }
-    if (notes.length <= MAX_SEPARATION_NOTES) return notes;
-    return [...notes.slice(0, MAX_SEPARATION_NOTES), `and ${notes.length - MAX_SEPARATION_NOTES} more pairs`];
+    return notes;
   };
 }
 
@@ -775,9 +806,16 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
   // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place, whatever subset is accepted
   const pins = blockPins([base as Json, patched as Json]);
   const above = abovePins(pins);
-  const separated = opts.separations ? separationNotes(opts.separations, base, patched) : undefined;
+  // the app's separations load both maps, so they're asked for only once a change writes a pin
+  let separated: ReturnType<typeof separationNotes> | null = null;
+  const notesFor = (names: Set<string>) => {
+    if (!opts.separations) return [];
+    if (separated === null) separated = separationNotes(opts.separations, base, patched);
+    return separated?.(names) ?? [];
+  };
   for (const c of p.changes) {
     const reasons = new Set<string>();
+    const lifted = new Set<string>();
     const measured = parseEntry(c.entry)?.kind === "measured";
     if (c.action === "remove") reasons.add("removes an entry");
     for (const op of c.ops ?? []) {
@@ -793,9 +831,8 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
       if (writesPin(segs, pins, above)) {
-        const notes = separated?.(touchedMessages(segs, [base as Json, patched as Json]));
-        if (notes?.length) for (const n of notes) reasons.add(`${LIFT_BLOCK}: ${n}`);
-        else reasons.add(`${LIFT_BLOCK}: changes what tells a blocked message from a send on its cmd`);
+        reasons.add(LIFT_BLOCK);
+        for (const n of touchedMessages(segs, [base as Json, patched as Json])) lifted.add(n);
       }
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
@@ -813,7 +850,12 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
       // that drives a sniffer walk
       if (keys.has("agentNotes") || segs[0] === "cautions" || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
     }
-    for (const reason of reasons) out.push({ change: c.id, reason });
+    // the separation notes stand where the plain reason would, at most MAX_SEPARATION_NOTES of them for the change
+    const notes = reasons.has(LIFT_BLOCK) ? notesFor(lifted) : [];
+    const lift = !notes.length
+      ? [`${LIFT_BLOCK}: changes what tells a blocked message from a send on its cmd`]
+      : [...notes.slice(0, MAX_SEPARATION_NOTES), ...(notes.length > MAX_SEPARATION_NOTES ? [`and ${notes.length - MAX_SEPARATION_NOTES} more pairs`] : [])].map((n) => `${LIFT_BLOCK}: ${n}`);
+    for (const reason of reasons) for (const r of reason === LIFT_BLOCK ? lift : [reason]) out.push({ change: c.id, reason: r });
   }
   return out;
 }
