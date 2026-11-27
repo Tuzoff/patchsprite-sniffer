@@ -46,7 +46,11 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
   front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
   (or write, flash, install, overwrite or import) is refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
   controls hide their names, so the walk prompt's guardrails still apply there. Enter, space, delete and backspace
-  are checked the same way against the control that has the keyboard focus.
+  are checked the same way against the control that has the keyboard focus. While a standard file dialog is open,
+  input may only scroll, press Esc or click Cancel (the file name and Open or Save go through `fill_dialog`). While one
+  of the editor's dialogs shows a hazard button, a shortcut letter (with or without Alt) is refused, and so is typed
+  text outside a text box. A key or typed text that follows other input in the same call waits 600 ms first, so a
+  dialog that input opened is seen before anything is typed into it.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which

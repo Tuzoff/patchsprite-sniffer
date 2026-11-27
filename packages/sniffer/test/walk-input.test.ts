@@ -164,6 +164,48 @@ test("enter is refused when the dialog in front would press a hazard default but
   assert.throws(() => parseStep("type:a\bb"), /one line of text/);
 });
 
+test("while a file dialog is open, input may only scroll, press Esc or click Cancel; Alt shortcuts are refused beside a hazard button", async () => {
+  const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
+  const button = (name: string) => async () => ({ found: true as const, element: { name, controlType: "Button", automationId: "", className: "", enabled: true, rect: RECT } });
+  const fileDialog = async () => ({ dialogs: [{ title: "Open", fileBox: true, buttons: ["&Open", "Cancel"] }] });
+  for (const step of ["type:C:\\x.syx", "key:enter", "key:alt+o", "key:tab", "dclick:1,1", "rclick:1,1", "drag:1,1,2,2"]) {
+    const { host, log } = inputHost(0, { dialogs: fileDialog, element: button("Open") });
+    await assert.rejects(run(host, [step], true), /a file dialog is open/, step);
+    assert.equal(log.filter((l) => !l.startsWith("front")).length, 0, step);
+  }
+  const open = inputHost(0, { dialogs: fileDialog, element: button("Open") });
+  await assert.rejects(run(open.host, ["click:1,1"]), /a file dialog is open/);
+  const cancel = inputHost(0, { dialogs: fileDialog, element: button("&Cancel") });
+  await run(cancel.host, ["click:1,1", "wheel:1,1,-2", "key:esc"]);
+  assert.equal(cancel.log.filter((l) => !l.startsWith("front")).length, 3, "Cancel, Esc and scrolling still work");
+  await assert.rejects(run(cancel.host, ["key:shift+esc"]), /a file dialog is open/);
+
+  const store = async () => ({ dialogs: [{ title: "Preset", fileBox: false, buttons: ["Store", "Cancel"] }] });
+  const s1 = inputHost(0, { dialogs: store });
+  for (const step of ["key:alt+s", "key:s", "key:shift+s", "key:1", "type:s"]) {
+    await assert.rejects(run(s1.host, [step]), /press the dialog's "Store" button through its shortcut letter/, step);
+  }
+  await run(s1.host, ["key:alt+s"], true);
+  await run(s1.host, ["key:ctrl+z", "key:tab", "key:esc"]);
+  const edit = { found: true as const, element: { name: "Name", controlType: "Edit", automationId: "", className: "", enabled: true, rect: RECT } };
+  const s2 = inputHost(0, { dialogs: store, focused: async () => edit });
+  await run(s2.host, ["type:my preset"]);
+  const ro = inputHost(0, { dialogs: store, focused: async () => ({ ...edit, element: { ...edit.element, readOnly: true } }) });
+  await assert.rejects(run(ro.host, ["type:s"]), /shortcut letter/);
+  const plain = inputHost(0, { dialogs: async () => ({ dialogs: [{ title: "Preset", fileBox: false, buttons: ["OK", "Cancel"] }] }) });
+  await run(plain.host, ["key:alt+o"]);
+});
+
+test("a key or typed text after other input waits for a dialog that input may have opened", async () => {
+  const waits: number[] = [];
+  const { host } = inputHost(0, {});
+  await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: async (ms) => void waits.push(ms) }, ["key:ctrl+s", "type:x", "click:1,1", "wheel:1,1,1", "key:tab"].map(parseStep));
+  assert.deepEqual(waits.filter((ms) => ms !== 50), [600, 600], "type after a key, and the key after the wheel that followed a click");
+  waits.length = 0;
+  await runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: async (ms) => void waits.push(ms) }, ["key:ctrl+s", "wait:0", "type:x", "click:1,1", "wait:1", "key:tab"].map(parseStep));
+  assert.deepEqual(waits.filter((ms) => ms !== 50), [0, 600, 1000], "a wait shorter than the settle doesn't stand in for it; a longer one does");
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);

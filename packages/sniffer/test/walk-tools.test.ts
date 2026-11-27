@@ -24,6 +24,7 @@ async function rig() {
   const recorder = new Recorder({ getDevice: async () => device, env, settleMs: 40, maxMs: 1000, pollMs: 5 });
   const log: string[] = [];
   const roots: string[] = [];
+  let saveAs = false; // ctrl+s opens the Save As dialog
   const host: WindowHost = fakeWindowHost({
     find: async (app) => (log.push(`find ${app}`), WIN),
     shot: async (_h, path, scale) => {
@@ -33,7 +34,8 @@ async function rig() {
     click: async (pid, x, y) => (log.push(`click ${pid} ${x},${y}`), { done: true }),
     type: async (pid, t) => (log.push(`type ${pid} ${t}`), { done: true }),
     element: async () => ({ found: true, element: { name: "Level", controlType: "Edit", automationId: "", className: "", enabled: true, rect: { left: 100, top: 100, width: 50, height: 20 }, value: "-6.0" } }),
-    dialogs: async () => ({ dialogs: [{ title: "Save As", fileBox: true, buttons: ["Save", "Cancel"] }] }),
+    keys: async (pid, vks) => (log.push(`keys ${pid} ${vks.join("+")}`), (saveAs = true), { done: true }),
+    dialogs: async () => ({ dialogs: saveAs ? [{ title: "Save As", fileBox: true, buttons: ["Save", "Cancel"] }] : [] }),
     fill: async (pid, title, path, button) => (log.push(`fill ${title} ${path} ${button}`), { done: true, remaining: [] }),
   });
   const register = walkTools({ makeHost: (root) => (roots.push(root), host), sleep: async () => {} });
@@ -96,7 +98,11 @@ test("during a capture: a shot of the capture's editor beside the capture, then 
   const ctl = await call("read_control", { x: 60, y: 55 });
   assert.equal((ctl.data!.control as { value: string }).value, "-6.0");
 
+  assert.equal((await call("editor_input", { steps: ["key:ctrl+s"] })).error, false);
   assert.match((await call("list_dialogs")).text, /Save As/);
+  const typed = await call("editor_input", { steps: ["type:C:\\elsewhere\\x.syx"] });
+  assert.equal(typed.error, true);
+  assert.match(typed.text, /a file dialog is open\. Use fill_dialog/);
   const backup = join(filesDir(file), "walk-backup.syx");
   const filled = await call("fill_dialog", { title: "Save As", path: backup, button: "Save" });
   assert.equal(filled.error, false, filled.text);
