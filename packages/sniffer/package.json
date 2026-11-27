@@ -10,5 +10,14 @@
   "exports": {
     "./walk/shot": "./src/walk/shot.ts",
     "./walk/host": "./src/walk/host.ts"
+  },
+  "bin": {
+    "patchsprite-sniff": "./bin/sniff.ts"
+  },
+  "dependencies": {
+    "@patchsprite/engine": "0.0.0"
+  },
+  "optionalDependencies": {
+    "frida": "17.26.3"
   }
 }
