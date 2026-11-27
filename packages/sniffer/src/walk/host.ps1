@@ -242,7 +242,7 @@ function Get-Dialogs([uint32]$editorPid) {
 function Dialog-Controls($d, $type) {
   @($d.FindAll([Windows.Automation.TreeScope]::Descendants,
     (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, $type))) |
-    Where-Object { -not $_.Current.IsOffscreen -and $_.Current.IsEnabled })
+    Where-Object { $_.Current.IsEnabled })  # not IsOffscreen: on a small screen a dialog's bottom row can be off it
 }
 
 function Invoke-Op($req) {
@@ -319,10 +319,12 @@ function Invoke-Op($req) {
     'fill' {
       $d = @(Get-Dialogs ([uint32]$req.pid) | Where-Object { $_.Current.Name -eq $req.title })
       if ($d.Count -ne 1) { return @{ done = $false; why = "$($d.Count) dialogs titled '$($req.title)'" } }
-      # The common dialogs' file-name box (automation id 1001) first, then one named like it, then the first edit box.
+      # The common dialogs' file-name box (automation id 1001; 1152 in a folder picker), else one labelled like it.
+      # Never any other edit box: a file list's column headers and the search box are edits too.
       $edits = @(Dialog-Controls $d[0] ([Windows.Automation.ControlType]::Edit))
-      $edit = @($edits | Where-Object { $_.Current.AutomationId -eq '1001' }) + @($edits | Where-Object { $_.Current.Name -like '*name*' }) + $edits
-      if ($edit.Count -eq 0) { return @{ done = $false; why = 'the dialog has no edit box' } }
+      $edit = @($edits | Where-Object { $_.Current.AutomationId -in '1001', '1152' }) +
+              @($edits | Where-Object { $_.Current.Name -like 'File name*' -or $_.Current.Name -like 'Folder*' })
+      if ($edit.Count -eq 0) { return @{ done = $false; why = 'the dialog has no file-name box' } }
       $edit[0].GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).SetValue([string]$req.path)
       Start-Sleep -Milliseconds 300
       $btn = @(Dialog-Controls $d[0] ([Windows.Automation.ControlType]::Button) | Where-Object { ($_.Current.Name -replace '&', '') -eq $req.button })
