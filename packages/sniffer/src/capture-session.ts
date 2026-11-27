@@ -75,8 +75,19 @@ export class CaptureSession {
     const wait = (ms: number) => sleep(ms, undefined, { signal }).catch(() => undefined);
     let failedPid: number | undefined;
     let tries = 0;
+    let listFailed = false;
     while (!signal.aborted) {
-      const pid = await this.findEditor();
+      let pid: number | undefined;
+      try {
+        pid = await this.findEditor();
+      } catch (e) {
+        // a passing failure to list processes: say so once, and keep looking
+        if (!listFailed) this.event("warning", { text: `could not list processes: ${(e as Error).message}`.slice(0, 1024) });
+        listFailed = true;
+        await wait(this.o.retryMs);
+        continue;
+      }
+      listFailed = false;
       if (pid === undefined || (pid === failedPid && tries >= MAX_TRIES)) {
         await wait(this.o.pollMs);
         continue;
