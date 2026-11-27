@@ -103,3 +103,18 @@ test("stopping before the editor ever starts ends at once", async () => {
   await c.stop();
   assert.deepEqual(c.records, []);
 });
+
+test("a failure to list processes is a warning, once, and the session keeps looking", async () => {
+  const device = new FakeDevice();
+  let fails = 3;
+  const real = device.enumerateProcesses.bind(device);
+  device.enumerateProcesses = async () => {
+    if (fails-- > 0) throw new Error("access denied");
+    return real();
+  };
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  const c = start(device);
+  await device.nextSession();
+  await c.stop();
+  assert.equal(c.kinds().filter((k) => k === "warning").length, 1);
+});
