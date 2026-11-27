@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { FoundWindow, ShotResult, WindowHost } from "../src/walk/host.ts";
+import { fakeWindowHost } from "./fake-window-host.ts";
 import { ShotError, shotFileName, shotToScreen, takeEditorShot } from "../src/walk/shot.ts";
 
 const RECT = { left: 100, top: 50, width: 1600, height: 900 };
@@ -12,7 +13,7 @@ const RECT = { left: 100, top: 50, width: 1600, height: 900 };
  * and the editor wasn't safely in front). */
 function fakeHost(frames: Array<number | "covered">, found = true) {
   const calls: string[] = [];
-  const host: WindowHost = {
+  const host: WindowHost = fakeWindowHost({
     async find(app) {
       calls.push(`find ${app}`);
       return found ? ({ found: true, hwnd: 7, pid: 42, rect: RECT, minimized: false } satisfies FoundWindow) : { found: false };
@@ -29,8 +30,7 @@ function fakeHost(frames: Array<number | "covered">, found = true) {
       await writeFile(path, `png ${f}`);
       return { saved: true, spread: f, source: "window", rect: RECT, width };
     },
-    close() {},
-  };
+  });
   return { host, calls };
 }
 

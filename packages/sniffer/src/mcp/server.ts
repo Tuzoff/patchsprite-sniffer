@@ -30,11 +30,11 @@ const HELP: Record<string, string> = {
   steps: `Labels say what changed: "control: before → after". "Drive gain: 5 → 6" is good; "Drive gain" alone isn't, and end_step refuses an action until its label says what changed (give the label to end_step when the after-value is known only then). A step ends once nothing counted has arrived for 0.6 s, or after 8 s ("timeout": something kept streaming). Clock, active sensing, short channel messages and the editor's polls are kept, flagged, and never counted. Set mode when the device has operating modes and you know which one it is in.`,
 };
 
-const ro = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+export const ro = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const rw = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
-const text = (t: string, structured?: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: t }], ...(structured ? { structuredContent: structured } : {}) });
-const refused = (e: unknown) => ({ content: [{ type: "text" as const, text: (e as Error).message }], isError: true });
+export const text = (t: string, structured?: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: t }], ...(structured ? { structuredContent: structured } : {}) });
+export const refused = (e: unknown) => ({ content: [{ type: "text" as const, text: (e as Error).message }], isError: true });
 
 /** Summarizes a capture file: its steps, each with its status and counted messages both ways. */
 export function summarize(file: string, maxSteps = 200): string {

@@ -1,7 +1,7 @@
 // Editor-window screenshots for the walk (S14, S11): the editor's window only, never the desktop, at half size by
 // default so the model's turns stay short. The window is brought to the front first, and a blank frame (all white
 // when the editor was behind, black after a native dialog) is retaken before it reaches the model.
-import { rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Rect, WindowHost } from "./host.ts";
 
@@ -58,6 +58,7 @@ export async function takeEditorShot(host: WindowHost, o: ShotOptions): Promise<
   const minSpread = o.minSpread ?? 16;
   const sleep = o.sleep ?? wait;
   const path = join(o.dir, shotFileName(o.name));
+  await mkdir(o.dir, { recursive: true });
   let last = "";
   for (let i = 1; i <= tries; i++) {
     if (i > 1) await sleep(o.retryDelayMs ?? 400);

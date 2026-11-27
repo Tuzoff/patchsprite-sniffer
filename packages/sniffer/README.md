@@ -25,18 +25,30 @@ attach it to a public issue.
 
 ## Walk tools (`src/walk/`)
 
-The tools a model uses to walk the editor (S11). They run on Windows; tests use a fake window host, so they run
-anywhere.
+The tools a model uses to walk the editor (S11), served by `sniff mcp` beside the capture tools. They work only while
+a capture runs: the capture names the editor, holds the pedal lock for the whole session and records what every
+input makes the editor send. They run on Windows; tests use a fake window host, so they run anywhere.
 
-- `host.ps1` is one long-lived Windows PowerShell process the tools talk to over JSON lines (`host.ts` starts it). It
-  finds the editor's window by its executable name, brings it to the front and takes its screenshot. No native npm
-  module is needed.
-- `shot.ts` takes an editor screenshot (S14): the editor's own window only, never the desktop, because shots go to a
-  model. The window is brought to the front first, and the shot is saved at half the window's width by default.
+- `editor_screenshot` (`shot.ts`, S14): the editor's own window only, never the desktop, because shots go to a model.
+  The window is brought to the front first, and the shot is saved at half the window's width, in a `.shots` folder
+  beside the capture.
   - It is drawn with `PrintWindow`, so nothing that overlaps the editor can show in it.
   - When that frame comes back blank (some editors draw on the GPU), it falls back to copying the window's area from
     the screen, but only while the editor is in front and no other window covers any part of it. Otherwise the shot
     is refused.
   - A blank frame (all white or all black) is retaken, three tries by default, and never handed to the model.
-  - The result gives the window's rectangle and the scale, so a point read off the shot maps back to the screen
-    (`shotToScreen`).
+- `editor_input` (`input.ts`): click, double-click, right-click, wheel, drag, keys and typed text, at points on the
+  latest shot, so inside the editor's main window (a menu or list that opens past its edge can't be clicked; use keys).
+  Input lands only on the editor's own windows: a point covered by another window (a chat app's
+  overlay, say) is retried for 30 s and then refused, and keys are sent only while one of the editor's windows is in
+  front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
+  (or write, flash, install, overwrite or import) is refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
+  controls hide their names, so the walk prompt's guardrails still apply there.
+- `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
+  toggle state), where the editor exposes it.
+- `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which
+  its screenshot can't show. A fill types the path into the dialog's file-name box and presses a button by caption.
+  The path must be inside the capture's folder, so nothing else on the computer can be opened or saved over, and
+  firmware, update, program and SysEx files are refused even there.
+- `host.ps1` is one long-lived Windows PowerShell process the tools talk to over JSON lines (`host.ts` starts it), so
+  no native npm module is needed. It saves shots only as `.png` files under the capture's shot folder.
