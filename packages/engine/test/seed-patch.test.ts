@@ -218,7 +218,18 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("getPreset", { op: "add", path: "/messages/getPreset/agentNotes", value: "say it kindly" })), ["changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("safety", { op: "add", path: "/safety/notes", value: ["press nothing"] })), ["changes safety rules, blocked lists or hazards", "changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("cautions", { op: "add", path: "/cautions", value: ["the editor must be closed"] })), ["changes text a chat model reads"]);
-  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards", "changes which port, USB unit or vendor app the map looks for"]);
+  // the driver and the host: any change, whole or in part
+  assert.deepEqual(reasons(edit("driver", { op: "add", path: "/driver", value: "control-only" })), ["changes which driver runs the unit"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host", value: { midiPort: "Acme FX" } })), ["changes which port, USB unit or vendor app the map looks for"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/midiPort", value: "Acme FX 2" })), ["changes which port, USB unit or vendor app the map looks for"]);
+  const withHost = { ...base, driver: "control-only", host: { midiPort: "Acme FX" } };
+  const hostReasons = (c: Change) => reviewReasons(withChanges(c), withHost).map((r) => r.reason);
+  assert.deepEqual(hostReasons(edit("host", { op: "replace", path: "/host/midiPort", value: "Acme FX 2", was: fingerprint("Acme FX") })), ["changes which port, USB unit or vendor app the map looks for"]);
+  assert.deepEqual(hostReasons(edit("driver", { op: "remove", path: "/driver", was: fingerprint("control-only") })), ["changes which driver runs the unit"]);
+  // a measured timing there is exempt, as in the framing; a timing that replaces something else isn't
+  assert.deepEqual(hostReasons({ ...edit("measured/host.attachMs", { op: "add", path: "/host/attachMs", value: timing }), action: "add" }), []);
+  assert.deepEqual(hostReasons(edit("measured/host.midiPort", { op: "replace", path: "/host/midiPort", value: timing, was: fingerprint("Acme FX") })), ["changes which port, USB unit or vendor app the map looks for"]);
 
   // a limit dropped by replacing its parent: the base map shows what went
   const payload = base.messages.setPreset.payload;

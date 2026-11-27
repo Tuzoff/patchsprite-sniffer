@@ -297,6 +297,9 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
 - any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
 - `/identity`, which decides which unit the map drives at all: any change to it, its `source` included;
+- `/driver`, which picks the code that runs the unit: any change to it;
+- `/host`, which says which MIDI port, USB unit and vendor apps the map looks for: any change to it, but for a
+  `measured/...` change exempt as in the framing;
 - `/modes`, which decides which entries each mode reads and writes through;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
