@@ -8,6 +8,7 @@
     "node": ">=22.18"
   },
   "exports": {
+    "./capture": "./src/capture.ts",
     "./seed-patch": "./src/seed-patch.ts",
     "./canonical-json": "./src/canonical-json.ts"
   },

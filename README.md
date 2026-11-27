@@ -8,6 +8,7 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 
 ## Formats
 
+- [Capture](docs/formats/capture.md): what the sniffer records in one session, as JSON Lines: every MIDI message both ways with its time, and the marked steps.
 - [Seed patch](docs/formats/seed-patch.md) (proposal): changes a unit's evidence makes to a seed device map, one change per entry, each with its evidence.
 
 Run the tests with `npm ci && npm test` (Node 22.18 or newer).

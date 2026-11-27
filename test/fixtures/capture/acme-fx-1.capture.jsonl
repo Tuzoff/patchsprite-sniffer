@@ -1,0 +1,23 @@
+{"type":"header","format":"patchsprite-capture","version":1,"session":"0b5e7a52-3c1d-4e8f-9a61-2f4d8c7b1e09","startedAt":"2026-11-27T08:00:00.000Z","tool":{"name":"patchsprite-sniffer","version":"0.0.0"},"os":{"platform":"win32","release":"10.0.26100"},"method":"frida-winmm","device":{"usb":{"vid":4660,"pid":22136},"ports":{"in":["Acme FX-1"],"out":["Acme FX-1"]}},"editor":{"exe":"AcmeEdit.exe","version":"1.0.0"},"note":"Made-up device for tests: Acme FX-1, manufacturer id 7d (non-commercial)."}
+{"type":"event","t":1795766400000,"kind":"attached","pid":4242}
+{"type":"event","t":1795766400100,"kind":"portOpen","dir":"out","port":"0x1a2b","device":1}
+{"type":"event","t":1795766400101,"kind":"portOpen","dir":"in","port":"0x3c4d","device":1}
+{"type":"midi","t":1795766400200,"dir":"out","kind":"sysex","bytes":"f0 7e 7f 06 01 f7","port":"0x1a2b"}
+{"type":"midi","t":1795766400230,"dir":"in","kind":"sysex","bytes":"f0 7e 01 06 02 7d 01 00 01 00 01 02 00 00 f7","port":"0x3c4d"}
+{"type":"stepStart","t":1795766401000,"id":1,"kind":"idle","label":"editor idle"}
+{"type":"midi","t":1795766401500,"dir":"in","kind":"short","bytes":"f8","port":"0x3c4d","flags":["clock"]}
+{"type":"midi","t":1795766402000,"dir":"out","kind":"sysex","bytes":"f0 7d 01 50 f7","port":"0x1a2b","flags":["poll"]}
+{"type":"midi","t":1795766402020,"dir":"in","kind":"sysex","bytes":"f0 7d 01 51 12 f7","port":"0x3c4d","flags":["poll"]}
+{"type":"stepEnd","t":1795766411000,"id":1,"status":"quiet"}
+{"type":"stepStart","t":1795766412000,"id":2,"kind":"selfTest","label":"Preset: 1 → 2","change":{"control":"Preset","before":"1","after":"2"}}
+{"type":"midi","t":1795766412100,"dir":"out","kind":"sysex","bytes":"f0 7d 01 12 01 f7","port":"0x1a2b"}
+{"type":"midi","t":1795766412120,"dir":"out","kind":"sysex","bytes":"f0 7d 01 30 f7","port":"0x1a2b"}
+{"type":"midi","t":1795766412150,"dir":"in","kind":"sysex","bytes":"f0 7d 01 31 43 6c 65 61 6e 20 20 20 20 20 20 20 f7","port":"0x3c4d"}
+{"type":"stepEnd","t":1795766412800,"id":2,"status":"quiet"}
+{"type":"stepStart","t":1795766413000,"id":3,"kind":"action","label":"Drive","before":"00003-before.png"}
+{"type":"midi","t":1795766413100,"dir":"out","kind":"sysex","bytes":"f0 7d 01 22 02 01 f7","port":"0x1a2b"}
+{"type":"midi","t":1795766413200,"dir":"in","kind":"short","bytes":"f8","port":"0x3c4d","flags":["clock"]}
+{"type":"stepEnd","t":1795766413800,"id":3,"status":"quiet","label":"Drive: off → on","change":{"control":"Drive","before":"off","after":"on"},"after":"00003-after.png"}
+{"type":"stepStart","t":1795766414000,"id":4,"kind":"manual","label":"Reorder blocks: amp, drive → drive, amp","change":{"control":"Reorder blocks","before":"amp, drive","after":"drive, amp"}}
+{"type":"stepEnd","t":1795766420000,"id":4,"status":"timeout","note":"the editor sent nothing for the drag"}
+{"type":"end","t":1795766421000,"reason":"stopped"}
