@@ -132,7 +132,7 @@ export function walkTools(o: WalkToolOptions = {}): RegisterTools {
     server.registerTool(
       "fill_dialog",
       {
-        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. The path must be inside the capture's folder (shown by capture_status), so nothing else can be opened or saved over; firmware, update, program and SysEx files are refused.",
+        description: "Types a path into one of the editor's file or folder dialogs (by its title, from list_dialogs) and presses a button by its caption, such as Save or Open. The path must be inside the capture's folder (shown by capture_status), so nothing else can be opened or saved over; firmware, update and program files are refused, and SysEx or MIDI files may be saved but never opened.",
         inputSchema: { title: z.string().min(1).max(200), path: z.string().min(1).max(1024), button: z.string().min(1).max(100) },
         annotations: input,
       },

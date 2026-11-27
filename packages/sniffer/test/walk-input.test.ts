@@ -189,7 +189,8 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
     [root, /inside the capture's folder/],
     ["relative.prst", /full path/],
     [join(root, "update.BIN"), /\.bin file/],
-    [join(root, "fw.syx"), /\.syx file/],
+    [join(root, "fw.syx"), /\.syx file may be saved, never opened/],
+    [join(root, "song.mid"), /\.mid file may be saved, never opened/],
     [join(root, "setup.exe"), /\.exe file/],
     [join(root, "update.bin."), /dot or space/],
     [join(root, "update.bin "), /dot or space/],
@@ -200,5 +201,9 @@ test("a dialog is pointed only inside the capture's folder, and never at firmwar
   }
   await assert.rejects(fillDialog(d, "Open", join(root, "ok.prst"), "Update"), /never presses "Update"/);
   assert.equal(filled, 0);
+  await fillDialog(d, "Save As", join(root, "backup.syx"), "Save");
+  await fillDialog(d, "Export", join(root, "backup.syx"), "Save");
+  assert.equal(filled, 2, "a backup may be saved as SysEx");
+  await assert.rejects(fillDialog(d, "Save As", join(root, "x.bin"), "Save"), /\.bin file/);
   assert.equal(checkDialogPath(root, join(root, "sub", "..", "ok.prst")), join(root, "ok.prst"));
 });
