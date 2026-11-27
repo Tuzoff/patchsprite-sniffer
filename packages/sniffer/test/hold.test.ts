@@ -69,7 +69,7 @@ test("only the editor sending something new renews the hold: not its polls repea
   const e = env();
   let t = 1_000_000;
   const hold = DeviceHold.take(e, () => {}, () => t);
-  const midi = (dir: "in" | "out", bytes: string) => ({ type: "midi" as const, t, dir, kind: "sysex" as const, bytes });
+  const midi = (dir: "in" | "out", bytes: string, flags?: "poll"[]) => ({ type: "midi" as const, t, dir, kind: "sysex" as const, bytes, ...(flags ? { flags } : {}) });
   const renewedBy = (r: ReturnType<typeof midi>) => {
     idleFor(e, 10 * 60_000);
     t += 61_000;
@@ -80,6 +80,7 @@ test("only the editor sending something new renews the hold: not its polls repea
   assert.equal(renewedBy(midi("out", "f0 7d 01 50 f7")), false, "the same poll again");
   assert.equal(renewedBy(midi("in", "f0 7d 01 51 12 f7")), false, "the device's answer");
   assert.equal(renewedBy(midi("out", "f8")), false, "clock");
+  assert.equal(renewedBy(midi("out", "f0 7d 01 50 03 f7", ["poll"])), false, "a poll the idle recording found, with a counter byte that differs each time");
   assert.equal(renewedBy(midi("out", "f0 7d 01 12 01 f7")), true, "a change");
   hold.release();
 });

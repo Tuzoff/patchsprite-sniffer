@@ -77,10 +77,10 @@ export class DeviceHold {
 
   /**
    * A message the capture saw: the editor sending something it hasn't sent before (the user changing something) is the
-   * session at work, and renews the hold. Its own polls repeating, clock, active sensing and the device's answers don't.
+   * session at work, and renews the hold. Its own polls (repeating, or matching the poll set an idle recording found), clock, active sensing and the device's answers don't.
    */
   heard(r: MidiRecord): void {
-    if (r.dir !== "out" || r.bytes === "f8" || r.bytes === "fe" || this.sent.has(r.bytes)) return;
+    if (r.dir !== "out" || r.flags?.includes("poll") || r.bytes === "f8" || r.bytes === "fe" || this.sent.has(r.bytes)) return;
     if (this.sent.size < 4096) this.sent.add(r.bytes);
     this.use();
   }
