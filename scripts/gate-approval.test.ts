@@ -44,6 +44,15 @@ test("only a maintainer may approve write grants, removed permissions keys, secr
   assert.equal(decide(f, ["gate-approved"], [labeled("gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true);
 });
 
+test("a new workflow needs a top-level permissions key, or the maintainer", () => {
+  const added = (patch: string, extra: Partial<ChangedFile> = {}) =>
+    humanOnly([{ filename: ".github/workflows/new.yml", status: "added", patch: `@@ -0,0 +1,3 @@\n${patch}`, ...extra }]);
+  assert.notEqual(added("+on: push\n+jobs:\n+  a:\n+    permissions: {}"), "", "only a job-level key");
+  assert.equal(added("+on: push\n+permissions: {}\n+jobs: {}"), "", "a top-level key");
+  assert.notEqual(added("+on: push", { status: "renamed", previous_filename: "docs/old.yml" }), "", "moved in from where it never ran");
+  assert.equal(humanOnly([wf("@@ -1 +1 @@\n+  timeout-minutes: 5")]), "", "an edit of an existing workflow");
+});
+
 test("read-only and narrowing permission lines are the reviewer's (27 Nov 2026)", () => {
   for (const line of ["+permissions: {}", "+permissions:\n+  contents: read", "+  issues: none", "-  pull-requests: read", "-  contents: write", "+permissions: read-all", "+  # write access is not needed here"]) {
     assert.equal(humanOnly([wf(`@@ -1 +1 @@\n${line}`)]), "", line);

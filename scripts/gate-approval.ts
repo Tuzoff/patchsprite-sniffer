@@ -22,10 +22,13 @@ const WRITE = /:\s*write\b|\bwrite-all\b|^\s*(-\s*)?write\s*[,\]}]*\s*(#.*)?$/i;
 const bare = (l: string) => l.replace(/["']/g, "").replace(/(^|[\s:,[{])![^\s,\]}]*/g, "$1");
 /** a removed permissions key: without it the job or workflow falls back to a wider default */
 const PERMISSIONS_KEY = /\bpermissions["']?\s*:/i;
+/** a workflow GitHub runs, and a top-level permissions key in it */
+const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+const TOP_PERMISSIONS = /^["']?permissions["']?\s*:/;
 /** YAML anchors, aliases and escapes can carry a grant or trigger from elsewhere, which line reading can't follow */
 const OPAQUE = /(^|[\s:,[{]|^\s*-)\s*[&*][A-Za-z_][\w-]*(?=\s|$|[,\]}])|\\[xuU][0-9A-Fa-f]{2}/;
 
-export type ChangedFile = { filename: string; previous_filename?: string; patch?: string };
+export type ChangedFile = { filename: string; previous_filename?: string; status?: string; patch?: string };
 export type LabelEvent = { event: string; created_at: string; label?: { name: string }; actor?: { login: string } };
 
 const names = (f: ChangedFile) => [f.filename, f.previous_filename].filter((n): n is string => !!n);
@@ -71,6 +74,12 @@ export function humanOnly(gate: ChangedFile[]): string {
     if (added.some((l) => WRITE.test(bare(l)))) return `${f.filename} grants write access`;
     if (removed.some((l) => PERMISSIONS_KEY.test(l))) return `${f.filename} removes a permissions key`;
     if (added.some((l) => OPAQUE.test(l))) return `${f.filename} has a YAML anchor, alias or escape the check can't follow`;
+    // a workflow new to GitHub (added, or moved in from where it never ran) without a top-level permissions key runs
+    // with the repository's default token
+    const isWorkflow = (n?: string) => !!n && WORKFLOW.test(n);
+    const isNew = f.status === "added" || f.status === "copied" || (isWorkflow(f.filename) && !isWorkflow(f.previous_filename) && !!f.previous_filename);
+    if (isWorkflow(f.filename) && isNew && !added.some((l) => TOP_PERMISSIONS.test(l)))
+      return `${f.filename} is a new workflow without a top-level permissions key`;
   }
   return "";
 }
