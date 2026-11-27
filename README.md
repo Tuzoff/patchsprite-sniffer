@@ -13,7 +13,7 @@ An open-source tool that records the MIDI and SysEx traffic between a hardware d
 
 ## Skills
 
-- [map-a-device](skills/map-a-device/SKILL.md): walking a device's vendor editor with the sniffer's tools, one control
+- [map-a-device](packages/sniffer/skills/map-a-device/SKILL.md): walking a device's vendor editor with the sniffer's tools, one control
   at a time, with the consent, walk plan and guardrails. Drop the folder into a client that loads skills (such as
   Claude Code); the sniffer's MCP server serves the same text as `help("walk")`.
 

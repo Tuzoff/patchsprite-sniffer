@@ -20,10 +20,10 @@ Rules:
 
 Call help("session") for the order of a session, help("steps") for step labels, and help("walk") for walking the editor with the walk tools (the "map a device" skill).`;
 
-/** The "map a device" skill (skills/map-a-device/SKILL.md at the repo root), without its frontmatter: one text for
+/** The "map a device" skill (packages/sniffer/skills/map-a-device/SKILL.md, shipped in the package), without its frontmatter: one text for
  * clients that load skills and for help("walk"). */
 export function walkGuide(): string {
-  const md = readFileSync(new URL("../../../../skills/map-a-device/SKILL.md", import.meta.url), "utf8");
+  const md = readFileSync(new URL("../../skills/map-a-device/SKILL.md", import.meta.url), "utf8");
   // A Windows checkout may turn the line ends into CRLF.
   return md.replace(/\r\n/g, "\n").replace(/^---\n[\s\S]*?\n---\n+/, "").trim();
 }
