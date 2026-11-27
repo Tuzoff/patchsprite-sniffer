@@ -17,5 +17,9 @@
   },
   "optionalDependencies": {
     "frida": "17.26.3"
+  },
+  "exports": {
+    "./walk/shot": "./src/walk/shot.ts",
+    "./walk/host": "./src/walk/host.ts"
   }
 }
