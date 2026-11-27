@@ -40,18 +40,17 @@ export function quietFlags(r: Pick<MidiRecord, "bytes">, rules: QuietRules = {})
 
 /** How many leading bytes of a device's answer a poll signature always keeps: F0, a 3-byte maker id and a command. */
 const ANSWER_HEAD = 5;
+/** The head kept for a message of this length: never the last value byte before F7, so a short answer keeps it varying. */
+const headOf = (b: readonly string[]) => Math.max(1, Math.min(ANSWER_HEAD, b.length - 2));
 
 /**
  * The poll set an idle recording shows (S13): every message the editor sent while left alone, and every answer the
  * device gave, as signatures. A byte that differed between repeats becomes `..`. The device's answers usually carry a
  * changing value (a meter, the DSP load) even when seen once, so an answer seen once keeps only its first five bytes
- * (F0, a maker id of up to three bytes, and the command; fewer when the answer is shorter, never its last value byte), its closing F7 and its length; an answer seen more than once
- * keeps every byte that stayed the same. Messages already flagged clock, active sensing or short are left out: the
- * rules flag them anyway.
+ * (F0, a maker id of up to three bytes, and the command; fewer when the answer is shorter, never its last value
+ * byte), its closing F7 and its length; an answer seen more than once keeps every byte that stayed the same. Messages
+ * already flagged clock, active sensing or short are left out: the rules flag them anyway.
  */
-/** The head kept for a message of this length: never the last value byte before F7, so a short answer keeps it varying. */
-const headOf = (b: readonly string[]) => Math.max(1, Math.min(ANSWER_HEAD, b.length - 2));
-
 export function pollSetFrom(idle: readonly MidiRecord[]): string[] {
   const out = new Set<string>();
   const groups = new Map<string, { dir: MidiRecord["dir"]; msgs: string[][] }>();
