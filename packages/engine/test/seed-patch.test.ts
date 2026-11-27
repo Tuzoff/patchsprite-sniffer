@@ -731,6 +731,47 @@ test("with block separations from the caller, a change that may lift a block nam
     "may lift a block: what keeps storeScene apart from the blocked factoryReset on 2.0 moves from byte 0: 02 vs 01 to byte 1: 05 vs 00",
   ]);
 
+  // a mode's own pair is weighed against the pair of the view without the mode, not taken for the base pair
+  const inMode = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    ...(map.firmwares?.["2.0"] ? [{ firmware: "2.0", mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" }] : []),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/firmwares/2.0", value: { messages: {} } }), inMode).filter((r) => r.startsWith("may lift a block")), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 0: 02 vs 01 to byte 1: 05 vs 00",
+  ]);
+  // a mode pair on both sides is compared with itself, not with the base pair
+  const modePair = (map: any): BlockSeparation[] => [...separations(map), { mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" }];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modePair), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+  ]);
+  // a mode's pair on a firmware falls back to that firmware's pair before the base pair
+  const onFwPair = { firmware: "2.0", send: "storeScene", blocked: "factoryReset", by: "byte 2: 07 vs 00" };
+  const modeOnFw = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    onFwPair,
+    ...(map === base ? [] : [{ ...onFwPair, mode: "live", by: "byte 1: 05 vs 00" }]),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeOnFw), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 2: 07 vs 00 to byte 1: 05 vs 00",
+  ]);
+  // the caller leaves a firmware's pair in a mode unnamed where the base map in that mode names it: that pair comes first
+  const inModeAll = { mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" };
+  const modeFirst = (map: any): BlockSeparation[] => [...separations(map), onFwPair, inModeAll, ...(map === base ? [] : [{ ...inModeAll, firmware: "2.0" }])];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeFirst), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live on 2.0 by byte 1: 05 vs 00",
+  ]);
+  // a mode that isn't a string is something else: the plain reason
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), () => [{ mode: 1, send: "storeScene", blocked: "factoryReset", by: "x" }] as any), [
+    "may lift a block: changes what tells a blocked message from a send on its cmd",
+  ]);
+
   // a layout a mode puts in place of a pinned one touches the messages whose payload it stands in for
   base.modes = { ...base.modes, use: { ...base.modes?.use, live: { layouts: { scene: "sceneLive" } } } };
   base.layouts.sceneLive = { size: 2, fields: [{ name: "magic", type: "u8", const: 4 }, { name: "slot", type: "u8" }] };
