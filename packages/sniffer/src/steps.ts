@@ -114,26 +114,26 @@ export class Steps {
     const change = extra.change ?? (extra.label ? parseLabel(extra.label) : undefined) ?? open.start.change;
     if (open.start.kind === "action" && !change && !extra.aborted) throw new Error(`say what changed, as "control: before → after" (the label was "${extra.label ?? open.start.label}")`);
     let status: StepEnd["status"] = "aborted";
-    const was = this.busy;
-    this.busy ??= "ending";
-    try {
     if (!extra.aborted) {
-      const started = open.start.t;
-      for (;;) {
-        const now = this.o.now();
-        if (now - Math.max(started, this.lastCounted) >= this.o.settleMs) {
-          status = "quiet";
-          break;
+      const was = this.busy;
+      this.busy ??= "ending";
+      try {
+        const started = open.start.t;
+        for (;;) {
+          const now = this.o.now();
+          if (now - Math.max(started, this.lastCounted) >= this.o.settleMs) {
+            status = "quiet";
+            break;
+          }
+          if (now - started >= this.o.maxMs) {
+            status = "timeout";
+            break;
+          }
+          await sleep(this.o.pollMs);
         }
-        if (now - started >= this.o.maxMs) {
-          status = "timeout";
-          break;
-        }
-        await sleep(this.o.pollMs);
+      } finally {
+        this.busy = was;
       }
-    }
-    } finally {
-      this.busy = was;
     }
     const label = extra.label ?? (change && !open.start.change ? formatLabel(change) : undefined);
     const end: StepEnd = { type: "stepEnd", t: this.o.now(), id: open.start.id, status, ...(label ? { label } : {}), ...(change && !open.start.change ? { change } : {}), ...(extra.after ? { after: extra.after } : {}), ...(extra.note ? { note: extra.note } : {}) };
