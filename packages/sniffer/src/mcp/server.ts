@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { parseCapture, stepMessages } from "@patchsprite/engine/capture";
+import { type MidiRecord, parseCapture, stepMessages } from "@patchsprite/engine/capture";
 import { z } from "zod";
 import type { Recorder } from "../recorder.ts";
 
@@ -41,9 +41,9 @@ export function summarize(file: string, maxSteps = 200): string {
   const r = parseCapture(readFileSync(file, "utf8"));
   if (!r.ok) return `The capture can't be read: line ${r.issues[0].line}: ${r.issues[0].message}`;
   const c = r.capture;
-  const midi = c.records.filter((x) => x.type === "midi");
+  const midi = c.records.filter((x): x is MidiRecord => x.type === "midi");
   const lines = [
-    `Capture of ${c.header.editor.exe}, started ${c.header.startedAt}: ${midi.length} messages, ${midi.filter((m) => m.type === "midi" && m.flags).length} of them flagged (clock, polls and the like). ${c.end ? `Ended: ${c.end.reason}.` : "Not ended (still running or cut off)."}`,
+    `Capture of ${c.header.editor.exe}, started ${c.header.startedAt}: ${midi.length} messages, ${midi.filter((m) => m.flags).length} of them flagged (clock, polls and the like). ${c.end ? `Ended: ${c.end.reason}.` : "Not ended (still running or cut off)."}`,
   ];
   for (const s of c.steps.slice(0, maxSteps)) {
     const msgs = stepMessages(c, s).filter((m) => !m.flags);
@@ -84,6 +84,7 @@ export function createServer(recorder: Recorder, extra: RegisterTools[] = []): M
   server.registerTool("capture_status", { description: "Whether a capture runs, whether it is attached to the editor, and what it has seen so far.", annotations: ro }, async () => {
     const c = recorder.counts;
     if (!c) return text("No capture is running.", { running: false });
+    if (recorder.failed) return text(`${recorder.failed}. Stop it with stop_capture.`, { running: true, failed: true, ...c });
     return text(`Capturing to ${recorder.file}: ${c.attached ? "attached to the editor" : "waiting for the editor"}; ${c.out} messages sent, ${c.in} received (${c.flagged} flagged); ${c.steps} steps.`, { running: true, ...c });
   });
 
@@ -104,7 +105,7 @@ export function createServer(recorder: Recorder, extra: RegisterTools[] = []): M
     "begin_step",
     {
       description: "Marks the start of one step, before changing one control in the editor. See help('steps').",
-      inputSchema: { label: z.string().min(1).max(200).describe('"control: before → after"'), kind: z.enum(["action", "manual", "selfTest"]).default("action"), mode: z.string().max(64).optional() },
+      inputSchema: { label: z.string().min(1).max(200).describe('"control: before → after"'), kind: z.enum(["action", "manual", "selfTest"]).default("action"), mode: z.string().max(64).regex(/^[a-z][A-Za-z0-9]*$/, "a mode is its camelCase key").optional() },
       annotations: rw,
     },
     async ({ label, kind, mode }) => {

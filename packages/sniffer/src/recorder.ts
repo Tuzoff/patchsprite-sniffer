@@ -44,6 +44,8 @@ export class Recorder {
     counts: Counts;
     file: string;
     editor: string;
+    /** Why the capture stopped on its own, if it did. */
+    failed?: string;
   };
 
   constructor(o: RecorderOptions) {
@@ -63,6 +65,11 @@ export class Recorder {
     return this.live?.editor;
   }
 
+  /** Why the running capture stopped on its own, if it did: steps then see nothing, so a caller should stop. */
+  get failed(): string | undefined {
+    return this.live?.failed;
+  }
+
   get counts(): Counts | undefined {
     return this.live && { ...this.live.counts };
   }
@@ -79,28 +86,37 @@ export class Recorder {
     const device = await this.o.getDevice();
     const got = acquirePedalLock("sniffer capture", { env });
     if (!got.ok) throw new Error(`The device is in use: ${describePedalLock(got.holder)}. Wait for it to finish, then start again.`);
+    let writer: CaptureWriter | undefined;
     try {
       const dir = capturesDir(env);
       mkdirSync(dir, { recursive: true });
       const file = join(dir, defaultCaptureName(header));
-      const writer = new CaptureWriter(file, header);
+      writer = new CaptureWriter(file, header);
       const counts: Counts = { out: 0, in: 0, flagged: 0, attached: false, steps: 0 };
       const write = (r: CaptureRecord) => {
+        writer!.write(r);
         if (r.type === "midi") {
           counts[r.dir]++;
           if (r.flags) counts.flagged++;
         } else if (r.type === "event" && (r.kind === "attached" || r.kind === "detached")) counts.attached = r.kind === "attached";
         else if (r.type === "stepStart") counts.steps++;
-        writer.write(r);
-        if (r.type === "stepEnd") writer.sync();
+        if (r.type === "stepEnd") writer!.sync();
       };
       const steps = new Steps({ write, rules: o.channelMessages ? { shortMax: 0 } : {}, settleMs: this.o.settleMs, maxMs: this.o.maxMs, pollMs: this.o.pollMs });
       const stop = new AbortController();
       const session = new CaptureSession({ device, editorExe: o.editorExe, attachDelayMs: o.attachDelayS * 1000, write: steps.record });
-      const running = session.run(stop.signal);
-      this.live = { writer, steps, lock: got.lock, stop, running, counts, file, editor: o.editorExe };
+      const live = { writer, steps, lock: got.lock, stop, running: Promise.resolve(), counts, file, editor: o.editorExe, failed: undefined as string | undefined };
+      // a capture that fails (Frida lost, the hook refused) is noted in the file; stop then ends it as an error
+      live.running = session.run(stop.signal).catch((e: unknown) => {
+        live.failed = `The capture stopped: ${(e as Error).message}`.slice(0, 1024);
+        try {
+          write({ type: "event", t: Date.now(), kind: "error", text: live.failed });
+        } catch {} // the file itself failed; stop still releases the lock
+      });
+      this.live = live;
       return file;
     } catch (e) {
+      writer?.close();
       releasePedalLock(got.lock, env);
       throw e;
     }
@@ -137,6 +153,7 @@ export class Recorder {
     try {
       await live.running;
       if (live.steps.openKind) await live.steps.end({ aborted: true, note: "the capture stopped" }).catch(() => undefined);
+      if (live.failed && reason === "stopped") [reason, text] = ["error", live.failed];
       live.writer.write({ type: "end", t: Date.now(), reason, ...(text ? { text: text.slice(0, 1024) } : {}) });
     } finally {
       live.writer.close();
