@@ -50,7 +50,7 @@ const u16 = z.number().int().min(0).max(0xffff);
  */
 export const SECTION_ENTRIES = [
   "transport", "host", "identity", "driver", "session", "safety", "blocked", "hazards", "scratch", "audio", "display",
-  "parameters", "controls", "settings", "eq", "addresses", "editor", "modes",
+  "parameters", "controls", "settings", "eq", "addresses", "editor", "modes", "cautions",
 ] as const;
 /** Top-level keys only ever covered by finer entries (`<message>`, `layout/<name>` and so on), never whole. */
 export const FINE_SECTIONS = ["messages", "layouts", "enums", "constants", "choices", "firmwares", "schema"] as const;
@@ -721,8 +721,9 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const last = segs.at(-1);
       if (("value" in op && makesSend(op.value, last) && !makesSend(old, last)) || (op.op === "add" && segs[0] === "controls" && segs.length <= 3))
         reasons.add("adds something that writes to the unit");
-      // agentNotes reach the player's chat model; safety.notes reach the model that drives a sniffer walk
-      if (keys.has("agentNotes") || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
+      // agentNotes and cautions (shown in the unit's status) reach the player's chat model; safety.notes reach the model
+      // that drives a sniffer walk
+      if (keys.has("agentNotes") || segs[0] === "cautions" || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
     }
     for (const reason of reasons) out.push({ change: c.id, reason });
   }
