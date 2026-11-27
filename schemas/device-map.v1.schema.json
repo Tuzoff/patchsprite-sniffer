@@ -3886,6 +3886,59 @@
       ],
       "additionalProperties": false
     },
+    "session": {
+      "type": "object",
+      "properties": {
+        "onConnect": {
+          "minItems": 1,
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z][A-Za-z0-9]*$"
+              },
+              "values": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "maxLength": 12288
+                    }
+                  ]
+                }
+              },
+              "pauseMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "note": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "onConnect"
+      ],
+      "additionalProperties": false
+    },
     "firmwares": {
       "type": "object",
       "propertyNames": {

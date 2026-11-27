@@ -550,6 +550,24 @@ How the computer finds the device:
   folder), and `attachDelay` (optional), how long to wait after the editor starts before attaching to it, a measured
   value in `s`.
 
+## `session` (on-connect steps)
+
+For a unit that needs its host to send something when the port opens, before it answers or before it takes edits (an
+edit mode, a handshake). Optional; the param-change driver runs it.
+
+- `onConnect`: 1 to 16 steps, run in order each time the port opens (and again after the unit went silent or was
+  unplugged), before the firmware is read. Each step is `{ message?, values?, pauseMs?, note? }`: the message is sent
+  with `values` for its payload fields (a request's reply, or its list, is waited for), then the step pauses for
+  `pauseMs` (at most 10000). A step sends a message, pauses, or both; `values` go only with a message. All pauses
+  together are at most 30000 ms.
+- The steps use the base map's messages: they go out before the firmware is known, so a firmware's own definitions do
+  not apply to them.
+- A request the unit leaves unanswered fails the connection as a silent unit does.
+
+Checked at load: each message is one the map has, a `request` or `send`, neither blocked nor redefined (nor its named
+layout) on any firmware, nor blocked in the base map; each `values` key is a field of its payload; and no payload field
+names a choice (settling it would ask the unit, which answers nothing until the steps have gone out).
+
 ## `scratch`
 
 `{ slots }`: one to eight patch slots, as the device spells their labels, best first, that may be used as scratch.

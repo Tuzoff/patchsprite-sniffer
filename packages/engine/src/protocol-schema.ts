@@ -78,6 +78,10 @@ const MAX_TEMPLATED_PLAIN = 64;
 const MAX_CHOICES = 16;
 const MAX_CHOICE_OPTIONS = 4;
 const MAX_CHOICES_PER_LAYOUT = 2;
+/** Caps on the on-connect steps: their count, one step's pause, and every pause together. */
+const MAX_CONNECT_STEPS = 16;
+const MAX_STEP_PAUSE_MS = 10_000;
+const MAX_CONNECT_PAUSE_MS = 30_000;
 /** Bytes in one record joined from pieces (`pieces`). */
 export const MAX_RECORD = 1 << 16;
 
@@ -885,6 +889,35 @@ const ChoiceSchema = z.strictObject({
   note: z.string().max(1024).optional(),
 });
 
+/**
+ * One step a unit needs from its host when the port opens, before it answers (an edit mode, a handshake): a message of
+ * the map, sent with `values` for its payload fields (a request's reply, or its list, is waited for), then a pause of
+ * `pauseMs`. A step may be only a pause (a unit that needs a moment after the port opens).
+ */
+const ConnectStepSchema = z
+  .strictObject({
+    message: name.optional(),
+    values: cappedRecord(name, z.union([z.number(), z.string().max(3 * MAX_STRING)]), 64, "values").optional(),
+    pauseMs: z.number().int().min(0).max(MAX_STEP_PAUSE_MS).optional(),
+    note: z.string().max(1024).optional(),
+  })
+  .refine((s) => s.message !== undefined || s.pauseMs !== undefined, "a step sends a message, pauses, or both")
+  .refine((s) => s.message !== undefined || s.values === undefined, "values go with a message");
+
+/** What the host does around a connection, beyond reading the unit's firmware. */
+const SessionSchema = z.strictObject({
+  /**
+   * Run in order each time the port opens, before the firmware is read: the base map's messages (a firmware's own
+   * definitions are not known yet). A request the unit does not answer fails the connection, as a silent unit does.
+   */
+  onConnect: z
+    .array(ConnectStepSchema)
+    .min(1)
+    .max(MAX_CONNECT_STEPS)
+    .refine((steps) => steps.reduce((n, s) => n + (s.pauseMs ?? 0), 0) <= MAX_CONNECT_PAUSE_MS, `at most ${MAX_CONNECT_PAUSE_MS} ms of pauses in all`),
+});
+export type ConnectStep = z.infer<typeof ConnectStepSchema>;
+
 const ProtocolBase = z.strictObject({
   /** Schema version of this section. */
   schema: z.literal(1),
@@ -924,6 +957,8 @@ const ProtocolBase = z.strictObject({
   /** Patch slots Patchsprite may use as scratch (compare_patch parks the edits there), labels as the device spells
    * them, best first. Whatever a player keeps there is backed up before first use. */
   scratch: z.strictObject({ slots: z.array(z.string().min(1).max(16)).min(1).max(8) }).optional(),
+  /** Steps the unit needs when its port opens (an edit mode, a handshake). */
+  session: SessionSchema.optional(),
   /** Per-firmware changes, keyed by the version string the device reports. */
   firmwares: cappedRecord(z.string().max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), FirmwareDeltaSchema, MAX_FIRMWARES, "firmwares").optional(),
 });
@@ -1360,6 +1395,45 @@ function defaultFault(x: z.infer<typeof ParameterSchema>, d: number, knobMax: nu
   return undefined;
 }
 
+/**
+ * On-connect steps send base messages the host sends (a request or send), never one the map blocks or redefines on any
+ * firmware (they go out before the firmware is known), with values only for fields their payload has, and no field
+ * naming a choice (settling it would ask the unit, which answers nothing until the steps have gone out).
+ */
+function connectIssues(p: ProtocolShape): string[] {
+  const out: string[] = [];
+  for (const [i, { message: n, values }] of (p.session?.onConnect ?? []).entries()) {
+    if (n === undefined) continue;
+    const where = `session.onConnect[${i}]`;
+    const m = has(p.messages, n) ? p.messages[n] : undefined;
+    if (!m) {
+      out.push(`${where}: unknown message "${n}"`);
+      continue;
+    }
+    if (m.dir !== "request" && m.dir !== "send") out.push(`${where}: ${n} is a ${m.dir}; the host sends a request or send`);
+    const fw = Object.entries(p.firmwares ?? {}).find(([, d]) => d.blocked?.includes(n))?.[0];
+    const blocker = p.blocked?.includes(n) ? "the base map" : fw !== undefined ? `firmware ${fw}` : undefined;
+    if (blocker) out.push(`${where}: ${n} is blocked on ${blocker}, and steps go out before the firmware is known`);
+    // the firmware is not known yet, so a firmware's own definition of a step would never be the one sent
+    const named = typeof m.payload === "string" ? m.payload : undefined;
+    for (const [v, d] of Object.entries(p.firmwares ?? {})) {
+      const what = d.messages && has(d.messages, n) ? n : named !== undefined && d.layouts && has(d.layouts, named) ? `${n}'s layout ${named}` : undefined;
+      if (what) {
+        out.push(`${where}: firmware ${v} redefines ${what}, and steps go out before the firmware is known`);
+        break;
+      }
+    }
+    // a layout the map lacks is reported on its own
+    const layout = messageLayout(m, p.layouts);
+    const fields = new Set(layout?.fields.map((f) => f.name));
+    if (layout) for (const k of Object.keys(values ?? {})) if (!fields.has(k)) out.push(`${where}: ${n} has no payload field "${k}"`);
+    // settling a choice means asking the unit, which answers nothing until the steps have gone out
+    const open = layout?.fields.find(isChoiceField);
+    if (open) out.push(`${where}: ${n}'s field ${open.name} names choice "${open.choice}", which can't be settled before the steps`);
+  }
+  return out;
+}
+
 type ChoiceField = ScalarField & { choice: string };
 
 const isChoiceField = (f: Layout["fields"][number]): f is ChoiceField =>
@@ -1507,6 +1581,7 @@ function crossCheck(p: ProtocolShape): string[] {
   for (const issue of piecesIssues(p)) out.add(issue);
   for (const issue of parametersIssues(p)) out.add(issue);
   for (const issue of choicesIssues(p)) out.add(issue);
+  for (const issue of connectIssues(p)) out.add(issue);
   // each firmware as the codec will see it; only what it replaces or adds is checked again in depth
   for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
     if (out.size >= MAX_ISSUES) break;
