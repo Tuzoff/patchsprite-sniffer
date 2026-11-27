@@ -15,7 +15,9 @@
     "patchsprite-sniff": "./bin/sniff.ts"
   },
   "dependencies": {
-    "@patchsprite/engine": "0.0.0"
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@patchsprite/engine": "0.0.0",
+    "zod": "4.6.7"
   },
   "optionalDependencies": {
     "frida": "17.26.3"
