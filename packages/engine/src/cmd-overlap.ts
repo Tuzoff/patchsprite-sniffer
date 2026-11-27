@@ -1,7 +1,7 @@
 // When two cmd templates can be the same bytes: as many tokens, and each token the same byte or a `{placeholder}` on
 // either side (a placeholder is filled per call, so it can be any byte). The one copy of the rule: the map's load
 // checks (cmdsOverlap) and the seed patch's blocked-message index (BlockedCmds) both use it, and
-// test/fixtures/cmd-overlap-vectors.json pins it for both.
+// packages/engine/vectors/cmd-overlap.json pins it for both.
 
 const isPlaceholder = (t: string) => t.startsWith("{");
 

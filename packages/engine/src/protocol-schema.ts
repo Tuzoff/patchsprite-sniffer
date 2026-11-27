@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { ControlsSchema, controlsIssues } from "./channel-messages.ts";
 import type { KnownCmd } from "./framing.ts";
-import { cmdsOverlap, tokensBegin } from "./cmd-overlap.ts";
+import { cmdsOverlap, MAX_CMD_TOKENS, tokensBegin } from "./cmd-overlap.ts";
 import { choiceEntry, type UnitChecks } from "./map-checks.ts";
 import { crc32, pack8to7, packedLength, septets32, type TopBits, unpack7to8, unpackedLength } from "./pack7.ts";
 import { joinNibbles, type NibbleOrder, splitNibbles } from "./nibbles.ts";
@@ -26,7 +26,8 @@ let codecObserver: CodecUseObserver | undefined;
 
 /**
  * Sets the one observer of codec use (a test run's per-message coverage log, say), or clears it with undefined. An
- * observer that throws is ignored: it never stops a codec call.
+ * observer that throws is ignored: it never stops a codec call. The observer belongs to this copy of the module: a
+ * second copy of the engine loaded beside it (another version, or src/ beside dist/) has its own.
  */
 export function observeCodecUse(observer: CodecUseObserver | undefined): void {
   codecObserver = observer;
@@ -411,7 +412,7 @@ const NibbleTransportSchema = z.strictObject({
     lengthBits: z.number().int().min(7).max(28),
     }),
   inner: z.strictObject({
-    cmdLength: z.number().int().min(1).max(8),
+    cmdLength: z.number().int().min(1).max(MAX_CMD_TOKENS),
     length: z.strictObject({ type: z.enum(["u16", "u32"]), endian }),
     compression: z.enum(["none", "lzo1x-literal"]),
   }),
@@ -420,7 +421,7 @@ const NibbleTransportSchema = z.strictObject({
   timing: TimingSchema,
 });
 
-const cmdByteCount = z.number().int().min(1).max(8);
+const cmdByteCount = z.number().int().min(1).max(MAX_CMD_TOKENS);
 
 /**
  * One SysEx message per inner message, with no nibbles, chunks or length field:
@@ -439,7 +440,7 @@ const XorTransportSchema = z.strictObject({
       verify: z.boolean(),
     }),
   }),
-  inner: z.strictObject({ cmdLength: z.number().int().min(1).max(8) }),
+  inner: z.strictObject({ cmdLength: z.number().int().min(1).max(MAX_CMD_TOKENS) }),
   endian,
   timing: TimingSchema,
 });
@@ -504,7 +505,7 @@ const AddressTransportSchema = z.strictObject({
     .refine((f) => f.deviceIdAt === undefined || f.deviceIdAt < f.header.split(" ").length, "deviceIdAt is inside the header"),
   inner: z
     .strictObject({
-      cmdLength: z.number().int().min(2).max(8),
+      cmdLength: z.number().int().min(2).max(MAX_CMD_TOKENS),
       /** The cmd's last bytes that are the address; the bytes before them are the command. */
       addressBytes: z.number().int().min(1).max(MAX_ADDRESS_BYTES),
     })

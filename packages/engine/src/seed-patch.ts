@@ -448,7 +448,8 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
       add(".entry", "edits go to the message itself, or to the mode's own entries (modes, layout/, enum/); a message on one block or in one mode is for marks");
 
     // a measured value is one of the fields the map schema measures, in its shape: the app refuses a map with any other
-    if (entry.kind === "measured" && !Object.hasOwn(MEASURED_FIELDS, entry.field))
+    const measuredField = entry.kind === "measured" && Object.hasOwn(MEASURED_FIELDS, entry.field) ? (entry.field as MeasuredField) : undefined;
+    if (entry.kind === "measured" && !measuredField)
       add(".entry", `${entry.field} is not a measured field (${Object.keys(MEASURED_FIELDS).join(", ")})`);
     const homes = entryHomes(entry);
     const opSegs = (c.ops ?? []).map((op) => splitPointer(op.path));
@@ -464,11 +465,11 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
         add(`.ops[${j}]`, "provenance comes from the change's source and evidence, and status and gaps are the draft's own bookkeeping; ops never write them");
       if (writesSource(segs, "value" in op ? op.value : undefined, "value" in op))
         add(`.ops[${j}]`, "an entry's source comes from the change's source and evidence; ops never write it");
-      if (entry.kind === "measured" && Object.hasOwn(MEASURED_FIELDS, entry.field) && op.op !== "remove") {
-        if (segs.length !== entry.field.split(".").length) add(`.ops[${j}].path`, "a measured value is written whole, at its field's path");
+      if (measuredField && op.op !== "remove") {
+        if (segs.length !== measuredField.split(".").length) add(`.ops[${j}].path`, "a measured value is written whole, at its field's path");
         else if ("value" in op) {
-          const r = measuredFieldSchema(entry.field as MeasuredField).safeParse(op.value);
-          if (!r.success) add(`.ops[${j}].value`, `not a measured value of ${entry.field}: ${r.error.issues.map((i) => `${i.path.join(".") || "value"} ${i.message}`).join("; ")}`);
+          const r = measuredFieldSchema(measuredField).safeParse(op.value);
+          if (!r.success) add(`.ops[${j}].value`, `not a measured value of ${measuredField}: ${r.error.issues.map((i) => `${i.path.join(".") || "value"} ${i.message}`).join("; ")}`);
         }
       }
       const other = overlapIn(edited, segs);
