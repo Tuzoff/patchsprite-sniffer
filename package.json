@@ -6,7 +6,8 @@
     "node": ">=22.18"
   },
   "workspaces": [
-    "packages/engine"
+    "packages/engine",
+    "packages/sniffer"
   ],
   "scripts": {
     "test": "node --test \"packages/*/test/*.test.ts\"",
