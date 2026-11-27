@@ -218,7 +218,11 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("getPreset", { op: "add", path: "/messages/getPreset/agentNotes", value: "say it kindly" })), ["changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("safety", { op: "add", path: "/safety/notes", value: ["press nothing"] })), ["changes safety rules, blocked lists or hazards", "changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("cautions", { op: "add", path: "/cautions", value: ["the editor must be closed"] })), ["changes text a chat model reads"]);
-  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards", "changes which port or USB unit the map is used for"]);
+  // the driver and the host: any change, whole or in part
+  assert.deepEqual(reasons(edit("driver", { op: "add", path: "/driver", value: "control-only" })), ["changes which driver runs the unit"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host", value: { midiPort: "Acme FX" } })), ["changes which port or USB unit the map is used for"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/midiPort", value: "Acme FX 2" })), ["changes which port or USB unit the map is used for"]);
 
   // a limit dropped by replacing its parent: the base map shows what went
   const payload = base.messages.setPreset.payload;

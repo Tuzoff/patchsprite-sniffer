@@ -850,6 +850,9 @@ export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions =
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
       // the identity decides which unit the map drives at all, whatever the change's evidence
       if (segs[0] === "identity") reasons.add("changes which unit the map drives (its identity)");
+      // the driver picks the code that runs the unit; the host, which port and USB unit the map is used for
+      if (segs[0] === "driver") reasons.add("changes which driver runs the unit");
+      if (segs[0] === "host") reasons.add("changes which port or USB unit the map is used for");
       if (segs[0] === "modes") reasons.add("changes which entries a mode uses");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
