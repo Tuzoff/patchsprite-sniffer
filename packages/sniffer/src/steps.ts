@@ -47,6 +47,8 @@ export interface StepResult {
   status: StepEnd["status"];
   /** Counted messages in the step. */
   counted: number;
+  /** Every message in the step, flagged or not. */
+  messages: MidiRecord[];
 }
 
 export class Steps {
@@ -125,7 +127,7 @@ export class Steps {
     const end: StepEnd = { type: "stepEnd", t: this.o.now(), id: open.start.id, status, ...(label ? { label } : {}), ...(change && !open.start.change ? { change } : {}), ...(extra.after ? { after: extra.after } : {}), ...(extra.note ? { note: extra.note } : {}) };
     this.o.write(end);
     this.open = undefined;
-    return { id: open.start.id, status, counted: open.messages.filter((m) => !m.flags).length };
+    return { id: open.start.id, status, counted: open.messages.filter((m) => !m.flags).length, messages: open.messages };
   }
 
   /**
