@@ -74,10 +74,10 @@ export class Recorder {
     return this.live && { ...this.live.counts };
   }
 
-  /** Starts a session: takes the pedal lock, creates the capture, and waits for the editor. */
   /**
-   * `channelMessages`: the device is driven by MIDI channel messages (CC, PC, NRPN), not SysEx, so those count as a
-   * step's traffic instead of being flagged short.
+   * Starts a session: takes the pedal lock, creates the capture, and waits for the editor. `channelMessages`: the
+   * device is driven by MIDI channel messages (CC, PC, NRPN), not SysEx, so those count as a step's traffic instead of
+   * being flagged short.
    */
   async start(o: { editorExe: string; attachDelayS: number; note?: string; channelMessages?: boolean }): Promise<string> {
     if (this.live) throw new Error(`a capture is already running (${this.live.file}); stop it first`);
