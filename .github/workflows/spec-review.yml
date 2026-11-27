@@ -1,0 +1,35 @@
+name: spec-review
+
+# A pull request merges only after both spec reviews said OK (Dmitry, 27 Nov 2026), as in the Patchsprite app: the
+# sniffer's spec and the app's scope each add their label once they are OK with it. A PR
+# that only changes CI, the repo's tooling or the release process takes `spec-review: not needed` instead. Only
+# people with triage rights or more can label, so the labels are the reviewers' word.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+
+# No secrets and no token: it reads only the event's own labels.
+permissions: {}
+
+jobs:
+  spec-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Both spec reviews said OK
+        run: |
+          labels="$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")"
+          has() { grep -qxF "$1" <<<"$labels"; }
+          if has "spec-review: not needed"; then
+            echo "No spec review needed (CI, tooling or release process only)."
+            exit 0
+          fi
+          missing=""
+          for l in "spec-ok: sniffer" "spec-ok: scope"; do
+            has "$l" || missing="${missing:+$missing, }$l"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Waiting for spec review: no ${missing} label yet."
+            exit 1
+          fi
+          echo "Both spec reviews said OK."
