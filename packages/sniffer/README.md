@@ -1,4 +1,4 @@
-# Sniffer
+# @patchsprite/sniffer
 
 Records the MIDI traffic between a device and its vendor editor while you use the editor as normal, into a capture
 file in the [capture format](../../docs/formats/capture.md). It only watches: it never opens the device's MIDI port
