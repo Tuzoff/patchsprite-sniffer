@@ -22,6 +22,7 @@ export class DeviceHold {
   /** While lost: the refusal to give, and when the device was last tried, so it is tried again at most once a minute. */
   private refusal?: string;
   private triedAt = 0;
+  private failedOnce = false;
   /** Messages the editor has sent so far: a repeat is its own polling, not the user at work. */
   private readonly sent = new Set<string>();
   private readonly now: () => number;
@@ -70,7 +71,10 @@ export class DeviceHold {
       this.triedAt = this.now();
       this.refusal = `The device is in use: ${describePedalLock(got.holder)}. The capture left it alone for a while, so it went to them. Wait for it to finish, then go on.`;
       return this.refusal;
-    } catch {
+    } catch (e) {
+      // the lock file can't be handled: say so once, since the hold now lapses on its own
+      if (!this.failedOnce) this.note("warning", `could not renew the device's lock: ${(e as Error).message}`.slice(0, 1024));
+      this.failedOnce = true;
       return undefined;
     }
   }
@@ -81,7 +85,9 @@ export class DeviceHold {
    */
   heard(r: MidiRecord): void {
     if (r.dir !== "out" || r.flags?.includes("poll") || r.bytes === "f8" || r.bytes === "fe" || this.sent.has(r.bytes)) return;
-    if (this.sent.size < 4096) this.sent.add(r.bytes);
+    // past the cap, nothing new can be told from a poll whose bytes vary, so traffic renews nothing more (steps still do)
+    if (this.sent.size >= 4096) return;
+    this.sent.add(r.bytes);
     this.use();
   }
 

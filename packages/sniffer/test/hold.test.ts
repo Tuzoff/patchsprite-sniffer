@@ -1,7 +1,7 @@
 // The capture's hold on the device (src/hold.ts), each test in its own temp PATCHSPRITE_HOME.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -101,4 +101,27 @@ test("while someone else has the device, it is tried again at most once a minute
   assert.equal(hold.use(), undefined, "a minute on: tried again, and taken");
   assert.equal(readPedalLock(e)?.owner, OWNER);
   hold.release();
+});
+
+test("past 4096 different messages, traffic renews nothing, and a lock file it can't renew is said once", () => {
+  const e = env();
+  let t = 1_000_000;
+  const notes: string[] = [];
+  const hold = DeviceHold.take(e, (kind, text) => notes.push(`${kind}: ${text}`), () => t);
+  for (let i = 0; i < 4096; i++) hold.heard({ type: "midi", t, dir: "out", kind: "sysex", bytes: `f0 7d 01 ${(i >> 8).toString(16).padStart(2, "0")} ${(i & 255).toString(16).padStart(2, "0")} f7` });
+  idleFor(e, 10 * 60_000);
+  t += 61_000;
+  hold.heard({ type: "midi", t, dir: "out", kind: "sysex", bytes: "f0 7d 01 7f 7f f7" });
+  assert.ok(usedAgo(e) > 9 * 60_000, "a new message past the cap: not renewed");
+  assert.equal(hold.use(true), undefined);
+  assert.ok(usedAgo(e) < 5_000, "a step still renews it");
+  // the data folder becomes a file: the lock can't be handled any more
+  hold.release();
+  const broken = env();
+  const hold2 = DeviceHold.take(broken, (kind, text) => notes.push(`${kind}: ${text}`), () => t);
+  rmSync(broken.PATCHSPRITE_HOME, { recursive: true, force: true });
+  writeFileSync(broken.PATCHSPRITE_HOME, "");
+  assert.equal(hold2.use(true), undefined);
+  assert.equal(hold2.use(true), undefined);
+  assert.equal(notes.filter((n) => n.startsWith("warning: could not renew the device's lock")).length, 1, notes.join("; "));
 });
