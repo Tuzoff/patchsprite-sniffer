@@ -2,8 +2,10 @@
 // pull requests are checked or merged (anything under .github/ or .claude/, this script, the checklist script, the
 // CLA and the licence) needs a maintainer's approval: the `gate-approved` label, added after the pull request's last
 // push. The reviewer's `ai-gate-approved` label may stand in for it, except on a change only a maintainer may approve
-// (human-only below): a workflow line about permissions, write access, secrets, the job's token or the
-// pull_request_target, workflow_run and issue_comment triggers, this check's own files, or a diff GitHub doesn't show. Every other pull request passes at once.
+// (human-only below): a workflow line that adds write access, removes a permissions key, or touches secrets, the job's
+// token, persist-credentials or the pull_request_target, workflow_run and issue_comment triggers; a YAML anchor, alias or
+// escape the rule can't follow; this check's own files; or a diff GitHub doesn't show. Read-only and narrowing
+// permission lines are the reviewer's: they can be undone (27 Nov 2026). Every other pull request passes at once.
 //
 // A push is dated by the start of this pull request's latest unbroken streak of runs on the head, or a later force-push,
 // reopen, branch restore or change of base branch; a label added before it is stale. Only people with triage rights or more can label, so the labels are their word.
@@ -12,9 +14,16 @@ const GATE_DIRS = [".github/", ".claude/"];
 const GATE_FILES = new Set(["scripts/gate-approval.ts", "scripts/pr-checklist.ts", "CLA.md", "LICENSE"]);
 /** this check's own files: only a maintainer may approve a change to them */
 const SELF = new Set([".github/workflows/gate-approval.yml", "scripts/gate-approval.ts"]);
-/** a changed workflow line that only a maintainer may approve */
-const RISKY_LINE =
-  /\bpermissions\b|:\s*["']?(read|write|none)["']?\s*(#.*)?$|\b(read|write)-all\b|\bsecrets\b|github\.token|GITHUB_TOKEN|id-token|persist-credentials|pull_request_target|workflow_run|issue_comment/;
+/** a changed workflow line, added or removed, that only a maintainer may approve */
+const RISKY_LINE = /\bsecrets\b|github\.token|GITHUB_TOKEN|persist-credentials|pull_request_target|workflow_run|issue_comment/i;
+/** an added line granting write, quotes and tags set aside: `scope: write`, `write-all`, or write as a value on its own line */
+const WRITE = /:\s*write\b|\bwrite-all\b|^\s*(-\s*)?write\s*[,\]}]*\s*(#.*)?$/i;
+/** a line as YAML reads its words: quotes and tags (`!!str write`) set aside */
+const bare = (l: string) => l.replace(/["']/g, "").replace(/(^|[\s:,[{])![^\s,\]}]*/g, "$1");
+/** a removed permissions key: without it the job or workflow falls back to a wider default */
+const PERMISSIONS_KEY = /\bpermissions["']?\s*:/i;
+/** YAML anchors, aliases and escapes can carry a grant or trigger from elsewhere, which line reading can't follow */
+const OPAQUE = /(^|[\s:,[{]|^\s*-)\s*[&*][A-Za-z_][\w-]*(?=\s|$|[,\]}])|\\[xuU][0-9A-Fa-f]{2}/;
 
 export type ChangedFile = { filename: string; previous_filename?: string; patch?: string };
 export type LabelEvent = { event: string; created_at: string; label?: { name: string }; actor?: { login: string } };
@@ -27,13 +36,41 @@ export function gateFiles(files: ChangedFile[]): ChangedFile[] {
   return files.filter((f) => names(f).some(isGate));
 }
 
+/**
+ * A line ending in \ continues on the next (a double-quoted YAML value, or a shell command): the new file's lines joined
+ * across each such break that an added line is part of, context lines included, so a word split across them is seen.
+ */
+function continued(patch: string): string[] {
+  const out: string[] = [];
+  let run: { text: string; n: number; add: boolean } | null = null;
+  for (const p of patch.split("\n")) {
+    if (p[0] !== "+" && p[0] !== " ") {
+      if (p[0] !== "-") run = null;
+      continue;
+    }
+    const l = p.slice(1);
+    run = run ? { text: run.text.replace(/\\\s*$/, "") + l.trimStart(), n: run.n + 1, add: run.add || p[0] === "+" } : { text: l, n: 1, add: p[0] === "+" };
+    if (!/\\\s*$/.test(run.text)) {
+      if (run.n > 1 && run.add) out.push(run.text);
+      run = null;
+    }
+  }
+  return out;
+}
+
 /** why only a maintainer may approve these gate changes, or "" when the reviewer's label may stand in */
 export function humanOnly(gate: ChangedFile[]): string {
   for (const f of gate) {
     if (names(f).some((n) => SELF.has(n) || n.startsWith(".claude/"))) return `${f.filename} is part of this check`;
     if (f.patch === undefined) return `GitHub shows no diff for ${f.filename}`;
-    const changed = f.patch.split("\n").filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)( |$)/.test(l));
-    if (changed.some((l) => RISKY_LINE.test(l))) return `${f.filename} changes permissions, secrets or a trigger`;
+    // the files API's patch has no ---/+++ headers: every line after its sign is the file's
+    const lines = f.patch.split("\n");
+    const added = [...lines.filter((l) => l[0] === "+").map((l) => l.slice(1)), ...continued(f.patch)];
+    const removed = lines.filter((l) => l[0] === "-").map((l) => l.slice(1));
+    if ([...added, ...removed].some((l) => RISKY_LINE.test(l))) return `${f.filename} changes secrets, the token or a trigger`;
+    if (added.some((l) => WRITE.test(bare(l)))) return `${f.filename} grants write access`;
+    if (removed.some((l) => PERMISSIONS_KEY.test(l))) return `${f.filename} removes a permissions key`;
+    if (added.some((l) => OPAQUE.test(l))) return `${f.filename} has a YAML anchor, alias or escape the check can't follow`;
   }
   return "";
 }
