@@ -67,12 +67,12 @@ export function createServer(recorder: Recorder, extra: RegisterTools[] = []): M
     "start_capture",
     {
       description: "Starts recording the editor's MIDI, after asking the user (see the instructions). Holds the device for the whole session. See help('session').",
-      inputSchema: { editor: z.string().min(1).max(128).describe("the editor's executable file name, as Task Manager shows it"), attachDelaySeconds: z.number().min(0).max(60).describe("how long to wait after the editor starts before attaching"), note: z.string().max(1024).optional() },
+      inputSchema: { editor: z.string().min(1).max(128).describe("the editor's executable file name, as Task Manager shows it"), attachDelaySeconds: z.number().min(0).max(60).describe("how long to wait after the editor starts before attaching"), channelMessages: z.boolean().optional().describe("true for a device driven by MIDI channel messages (CC, PC, NRPN) rather than SysEx, so they count as traffic"), note: z.string().max(1024).optional() },
       annotations: rw,
     },
-    async ({ editor, attachDelaySeconds, note }) => {
+    async ({ editor, attachDelaySeconds, channelMessages, note }) => {
       try {
-        const file = await recorder.start({ editorExe: editor, attachDelayS: attachDelaySeconds, note });
+        const file = await recorder.start({ editorExe: editor, attachDelayS: attachDelaySeconds, channelMessages, note });
         lastFile = file;
         return text(`Capturing to ${file}. Waiting for ${editor}; check capture_status until it is attached.`, { file });
       } catch (e) {

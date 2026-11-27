@@ -68,7 +68,11 @@ export class Recorder {
   }
 
   /** Starts a session: takes the pedal lock, creates the capture, and waits for the editor. */
-  async start(o: { editorExe: string; attachDelayS: number; note?: string }): Promise<string> {
+  /**
+   * `channelMessages`: the device is driven by MIDI channel messages (CC, PC, NRPN), not SysEx, so those count as a
+   * step's traffic instead of being flagged short.
+   */
+  async start(o: { editorExe: string; attachDelayS: number; note?: string; channelMessages?: boolean }): Promise<string> {
     if (this.live) throw new Error(`a capture is already running (${this.live.file}); stop it first`);
     const env = this.o.env ?? process.env;
     const header = captureHeader({ editorExe: o.editorExe, note: o.note });
@@ -90,7 +94,7 @@ export class Recorder {
         writer.write(r);
         if (r.type === "stepEnd") writer.sync();
       };
-      const steps = new Steps({ write, settleMs: this.o.settleMs, maxMs: this.o.maxMs, pollMs: this.o.pollMs });
+      const steps = new Steps({ write, rules: o.channelMessages ? { shortMax: 0 } : {}, settleMs: this.o.settleMs, maxMs: this.o.maxMs, pollMs: this.o.pollMs });
       const stop = new AbortController();
       const session = new CaptureSession({ device, editorExe: o.editorExe, attachDelayMs: o.attachDelayS * 1000, write: steps.record });
       const running = session.run(stop.signal);

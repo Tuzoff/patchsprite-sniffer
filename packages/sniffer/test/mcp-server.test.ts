@@ -136,3 +136,16 @@ test("steps and stops without a capture are refused in words; a path for the edi
   assert.equal(p.error, true);
   assert.match(p.text, /file name, not a path/);
 });
+
+test("a channel-message device: its CC and PC messages count as a step's traffic", async () => {
+  const { device, call } = await rig();
+  device.processes = [{ pid: 7, name: "AcmeEdit.exe" }];
+  await call("start_capture", { editor: "AcmeEdit.exe", attachDelaySeconds: 0, channelMessages: true });
+  await until(() => device.sessions[0]?.scripts[0]?.loaded === true);
+  await call("begin_step", { label: "Preset: 1 → 2" });
+  device.sessions[0].scripts[0].send({ dir: "out", kind: "short", h: "0x1a", hex: "c001" });
+  device.sessions[0].scripts[0].send({ dir: "out", kind: "short", h: "0x1a", hex: "b00764" });
+  device.sessions[0].scripts[0].send({ dir: "in", kind: "short", h: "0x2b", hex: "f8" });
+  assert.equal((await call("end_step")).data!.counted, 2);
+  await call("stop_capture");
+});
