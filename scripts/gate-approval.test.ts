@@ -65,3 +65,11 @@ test("only an approver's label counts", () => {
   assert.equal(decide(f, ["gate-approved"], [by("someone-else")], PUSH).ok, false);
   assert.equal(decide(f, ["gate-approved"], [by("Tuzoff")], PUSH).ok, true);
 });
+
+test("a force-push, reopen or branch restore counts as a push, so a deleted run can't hide one", () => {
+  const runs = [{ head_sha: "A", created_at: "2026-11-27T10:00:00Z" }];
+  for (const event of ["head_ref_force_pushed", "reopened", "head_ref_restored"]) {
+    assert.equal(pushedAt(runs, "A", [{ event, created_at: "2026-11-27T11:00:00Z" }]), "2026-11-27T11:00:00Z", event);
+  }
+  assert.equal(pushedAt(runs, "A", [labeled("gate-approved", "2026-11-27T11:00:00Z")]), "2026-11-27T10:00:00Z");
+});

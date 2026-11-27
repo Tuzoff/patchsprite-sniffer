@@ -5,8 +5,8 @@
 // (human-only below): a workflow line about permissions, write access, secrets, the job's token or the
 // pull_request_target, workflow_run and issue_comment triggers, this check's own files, or a diff GitHub doesn't show. Every other pull request passes at once.
 //
-// A push is dated by this workflow's first run for the new head on this pull request, which a branch can't change; a label added before
-// it is stale. Only people with triage rights or more can label, so the labels are their word.
+// A push is dated by the start of this pull request's latest unbroken streak of runs on the head, or a later force-push,
+// reopen, branch restore or change of base branch; a label added before it is stale. Only people with triage rights or more can label, so the labels are their word.
 
 const GATE_DIRS = [".github/", ".claude/"];
 const GATE_FILES = new Set(["scripts/gate-approval.ts", "scripts/pr-checklist.ts", "CLA.md", "LICENSE"]);
@@ -41,10 +41,13 @@ export function humanOnly(gate: ChangedFile[]): string {
 /** who may approve: the maintainer's login, which the reviewer thread also posts under (labels need triage rights) */
 const APPROVERS = new Set(["Tuzoff"]);
 
+/** timeline events that change the head or the files as a push does; going back to an earlier head always needs one */
+const RESETS = new Set(["base_ref_changed", "head_ref_force_pushed", "head_ref_restored", "reopened"]);
+
 /**
  * When the head was pushed: the first of this pull request's runs in the unbroken streak on the current head, newest
- * first (so pushing A, then B, then A again dates A from its last push, not its first), or a later change of base
- * branch, which changes the files as a push does. runs: this pull request's runs of this workflow, any order.
+ * first (so pushing A, then B, then A again dates A from its last push, not its first), or a later reset event (a
+ * deleted run can hide B, but not the force-push back to A). runs: this pull request's runs of this workflow, any order.
  */
 export function pushedAt(runs: { created_at: string; head_sha: string }[], head: string, events: LabelEvent[]): string {
   const newest = [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -54,7 +57,7 @@ export function pushedAt(runs: { created_at: string; head_sha: string }[], head:
     start = r.created_at;
   }
   // this run is one of them, so there is always a start; without one, nothing earlier than now counts
-  const times = [start ?? new Date().toISOString(), ...events.filter((e) => e.event === "base_ref_changed").map((e) => e.created_at)];
+  const times = [start ?? new Date().toISOString(), ...events.filter((e) => RESETS.has(e.event)).map((e) => e.created_at)];
   return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
 }
 
@@ -96,10 +99,11 @@ export async function main(): Promise<void> {
     if (!r.ok) throw new Error(`GET ${path}: ${r.status}`);
     return r.json();
   };
-  const all = async (path: string): Promise<any[]> => {
+  const all = async (path: string, key?: string): Promise<any[]> => {
     const out: any[] = [];
     for (let page = 1; ; page++) {
-      const batch = await api(`${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+      const body = await api(`${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+      const batch = key ? body[key] : body;
       out.push(...batch);
       if (batch.length < 100) return out;
     }
@@ -126,15 +130,13 @@ export async function main(): Promise<void> {
     if (files.length >= 3000) throw new Error("GitHub lists at most 3000 files");
     const events = await all(`repos/${repo}/issues/${pr}/timeline`);
     // only this pull request's runs (named by the workflow's run-name), every head it has had: another pull request
-    // may have shown the same commit, and an earlier visit of this head would date this push too early
-    const runs: { created_at: string; head_sha: string; display_title: string }[] = [];
+    // may have shown the same commit, and an earlier visit of this head would date this push too early. GitHub lists the
+    // newest 1000; a run it leaves out (older, or from before a branch rename) only dates the push later
     const branch = encodeURIComponent(pull.head.ref);
-    for (let page = 1; ; page++) {
-      const batch = (await api(`repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&branch=${branch}&per_page=100&page=${page}`))
-        .workflow_runs as typeof runs;
-      runs.push(...batch);
-      if (batch.length < 100) break;
-    }
+    const runs: { created_at: string; head_sha: string; display_title: string }[] = await all(
+      `repos/${repo}/actions/workflows/gate-approval.yml/runs?event=pull_request_target&branch=${branch}`,
+      "workflow_runs",
+    );
     const pushed = pushedAt(runs.filter((r) => r.display_title === `gate-approval #${pr}`), head, events);
     const v = decide(files, pull.labels.map((l: { name: string }) => l.name), events, pushed);
     console.log(`Head ${head} pushed at ${pushed}.`);
