@@ -209,8 +209,8 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("session", { op: "add", path: "/session", value: { onConnect: ["editMode"] } })), ["changes what is sent on every connect"]);
   // any change to the identity, even only a better source for it
   assert.deepEqual(reasons(edit("identity", { op: "add", path: "/identity", value: { manufacturer: "7d", family: "01 02" } })), ["changes which unit the map drives (its identity)"]);
-  const withIdentity = { ...base, identity: { manufacturer: "7d", family: "01 02", source: { kind: "manual", ref: "x" } } };
-  const betterSource = edit("identity", { op: "replace", path: "/identity/source", value: { kind: "capture", ref: "y" }, was: fingerprint({ kind: "manual", ref: "x" }) });
+  const withIdentity = { ...base, identity: { manufacturer: "7d", family: "01 02", source: { kind: "community-table", ref: "x" } } };
+  const betterSource = edit("identity", { op: "replace", path: "/identity/source", value: { kind: "capture", ref: "y" }, was: fingerprint({ kind: "community-table", ref: "x" }) });
   assert.deepEqual(reviewReasons(withChanges(betterSource), withIdentity).map((r) => r.reason), ["changes which unit the map drives (its identity)"]);
   // a measured value there isn't exempt the way a timing in the framing is
   const timing = { value: 5, unit: "ms", measuredOn: "acme fx-1", date: "2026-11-24", source: "sniffer-capture" };
