@@ -158,6 +158,11 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         if (step.op === "key" && PRESS_KEYS.some((k) => codes.includes(k))) await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, codes.includes(KEYS.enter), n);
         // A typed space presses a focused button too.
         if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
+        // In an open menu a letter picks the item it underlines, unseen; arrows and Enter (checked above) or a click
+        // reach the same item with its name checked.
+        if ((step.op === "type" || (step.op === "key" && !codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit))) && (await menuOpen(d.host, win.pid))) {
+          throw new InputError(`step ${n + 1} (${step.op === "key" ? `key:${step.combo}` : "type"}) refused: a menu is open, and a letter there picks an item unseen. Click the item, or move to it with the arrow keys and press Enter`);
+        }
       }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
@@ -215,6 +220,11 @@ async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number,
 }
 
 const isLetterOrDigit = (vk: number) => (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5a);
+
+async function menuOpen(host: WindowHost, pid: number): Promise<boolean> {
+  const at = await host.focused(pid);
+  return at.found && (at.element.controlType === "MenuItem" || at.element.controlType === "Menu" || at.element.controlType === "MenuBar");
+}
 
 async function focusedInTextBox(host: WindowHost, pid: number): Promise<boolean> {
   const at = await host.focused(pid);

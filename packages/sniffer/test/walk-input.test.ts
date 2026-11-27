@@ -206,6 +206,22 @@ test("a key or typed text after other input waits for a dialog that input may ha
   assert.deepEqual(waits.filter((ms) => ms !== 50), [0, 600, 1000], "a wait shorter than the settle doesn't stand in for it; a longer one does");
 });
 
+test("in an open menu, shortcut letters and typed text are refused; arrows, Enter on a safe item and clicks still work", async () => {
+  const item = (name: string) => async () => ({ found: true as const, element: { name, controlType: "MenuItem", automationId: "", className: "", enabled: true, rect: RECT } });
+  const run = (host: WindowHost, steps: string[], hazardApproved = false) => runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep, hazardApproved }, steps.map(parseStep));
+  for (const step of ["key:f", "key:alt+f", "key:shift+u", "key:2", "type:u"]) {
+    const { host, log } = inputHost(0, { focused: item("Open...") });
+    await assert.rejects(run(host, [step]), /a menu is open/, step);
+    assert.equal(log.filter((l) => !l.startsWith("front")).length, 0, step);
+  }
+  const safe = inputHost(0, { focused: item("Open..."), element: item("Open...") });
+  await run(safe.host, ["key:down", "key:enter", "key:ctrl+o", "click:1,1", "key:esc"]);
+  assert.equal(safe.log.filter((l) => !l.startsWith("front")).length, 5);
+  const firmware = inputHost(0, { focused: item("Firmware Update...") });
+  await assert.rejects(run(firmware.host, ["key:enter"]), /focused control is "Firmware Update/);
+  await run(firmware.host, ["key:u"], true);
+});
+
 test("no editor window: input is refused", async () => {
   const host = fakeWindowHost({ find: async () => ({ found: false }) });
   await assert.rejects(runSteps({ host, app: "Editor.exe", beforeInput: async () => {}, sleep: noSleep }, [parseStep("click:1,1")]), /is the editor running/);

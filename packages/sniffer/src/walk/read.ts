@@ -88,7 +88,7 @@ export async function fillDialog(d: FillDeps, title: string, path: string, butto
   if (!title || !button) throw new InputError("a dialog fill needs the dialog's title and the button's caption");
   // Every #32770 window of the editor counts as a dialog, its own ones too, so a fill never presses a button that
   // a click would need the user's say-so for.
-  if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}": ask the user, and press it with editor_input if they say yes`);
+  if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}", which can update firmware, reset, store over or delete. Tell the user; only they press it, by hand`);
   const full = checkDialogPath(d.allowedRoot, path, isSave(button));
   await d.beforeInput();
   const win = await editorWindow(d.host, d.app);
