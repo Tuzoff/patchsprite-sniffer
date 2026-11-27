@@ -692,10 +692,12 @@ const LIFT_BLOCK = "may lift a block";
 /**
  * A send or request kept apart from a blocked message on a cmd they can share, and what keeps them apart ("byte 4: 08
  * vs 01", "length: 1 vs 2 or more"), as a caller's map checks work it out. A firmware is named only for a pair that is
- * new there or rests on something else.
+ * new there or rests on something else, and a mode only for a pair its stand-ins make new or move (in the base map, or
+ * in `firmware`'s view of it).
  */
 export interface BlockSeparation {
   firmware?: string;
+  mode?: string;
   send: string;
   blocked: string;
   by: string;
@@ -774,14 +776,20 @@ const shown = (s: string, max = 80): string => {
  * means the patch puts a send beside a blocked message, a changed `by` means a separation moved, a pair that is gone
  * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
  * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
- * since an unnamed pair holds on every firmware that doesn't say otherwise. The base map's and the whole patch's
+ * since an unnamed pair holds on every firmware that doesn't say otherwise; a pair named in a mode likewise with the
+ * pair of the view without the mode (that firmware's, then the base map's). The base map's and the whole patch's
  * separations are asked for once. Undefined when the base map's, the whole patch's or `map`'s separations can't be
  * had: a change that is fine alone may still leave nothing between a send and a blocked message beside the rest.
  */
 function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): (map: unknown, names: Set<string>) => string[] | undefined {
-  const key = (s: { firmware?: string; send: string; blocked: string }) => [s.firmware ?? "", s.send, s.blocked].join(SEP);
+  const key = (s: { firmware?: string; mode?: string; send: string; blocked: string }) => [s.firmware ?? "", s.mode ?? "", s.send, s.blocked].join(SEP);
   const ok = (s: unknown): s is BlockSeparation =>
-    isObject(s) && typeof s.send === "string" && typeof s.blocked === "string" && typeof s.by === "string" && (s.firmware === undefined || typeof s.firmware === "string");
+    isObject(s) &&
+    typeof s.send === "string" &&
+    typeof s.blocked === "string" &&
+    typeof s.by === "string" &&
+    (s.firmware === undefined || typeof s.firmware === "string") &&
+    (s.mode === undefined || typeof s.mode === "string");
   const table = (map: unknown): Map<string, BlockSeparation> | undefined => {
     try {
       const list: unknown = separations(map);
@@ -792,8 +800,17 @@ function separationNotes(separations: NonNullable<ReviewOptions["separations"]>,
   };
   const was = table(base);
   const whole = was && table(patched);
-  const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => t.get(key(s)) ?? (s.firmware ? t.get(key({ send: s.send, blocked: s.blocked })) : undefined);
-  const on = (s: BlockSeparation) => (s.firmware ? ` on ${shown(s.firmware)}` : "");
+  // a pair a mode doesn't name holds as in the view without it, and one a firmware doesn't name as in the base map
+  const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => {
+    const { send, blocked } = s;
+    const views = [s, ...(s.mode ? [{ firmware: s.firmware }] : []), ...(s.firmware ? [{}] : [])];
+    for (const v of views) {
+      const hit = t.get(key({ ...v, send, blocked }));
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  const on = (s: BlockSeparation) => `${s.mode ? ` in mode ${shown(s.mode)}` : ""}${s.firmware ? ` on ${shown(s.firmware)}` : ""}`;
   return (map, names) => {
     const now = map === patched ? whole : whole && table(map);
     if (!was || !now) return undefined;
