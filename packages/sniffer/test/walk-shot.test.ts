@@ -13,8 +13,8 @@ const RECT = { left: 100, top: 50, width: 1600, height: 900 };
 function fakeHost(frames: Array<number | "covered">, found = true) {
   const calls: string[] = [];
   const host: WindowHost = {
-    async find(exe) {
-      calls.push(`find ${exe}`);
+    async find(app) {
+      calls.push(`find ${app}`);
       return found ? ({ found: true, hwnd: 7, pid: 42, rect: RECT, minimized: false } satisfies FoundWindow) : { found: false };
     },
     async front(hwnd) {
@@ -40,7 +40,7 @@ const exists = (p: string) => access(p).then(() => true, () => false);
 test("a shot brings the editor to the front first and saves it at half size", async () => {
   const dir = await mkdtemp(join(tmpdir(), "walk-shot-"));
   const { host, calls } = fakeHost([120]);
-  const shot = await takeEditorShot(host, { exe: "Editor.exe", dir, name: "Amp block", sleep: noSleep });
+  const shot = await takeEditorShot(host, { app: "Editor.exe", dir, name: "Amp block", sleep: noSleep });
   assert.deepEqual(calls, ["find Editor.exe", "front 7", "shot 7 0.5 16"]);
   assert.equal(shot.path, join(dir, "amp-block.png"));
   assert.equal(shot.width, 800);
@@ -53,7 +53,7 @@ test("a shot brings the editor to the front first and saves it at half size", as
 test("a blank frame is retaken", async () => {
   const dir = await mkdtemp(join(tmpdir(), "walk-shot-"));
   const { host, calls } = fakeHost([0, 3, 90]);
-  const shot = await takeEditorShot(host, { exe: "Editor.exe", dir, name: "x", sleep: noSleep });
+  const shot = await takeEditorShot(host, { app: "Editor.exe", dir, name: "x", sleep: noSleep });
   assert.equal(shot.tries, 3);
   assert.equal(calls.filter((c) => c.startsWith("front")).length, 3);
   assert.equal(await readFile(shot.path, "utf8"), "png 90");
@@ -62,7 +62,7 @@ test("a blank frame is retaken", async () => {
 test("after the last blank try the shot is refused and the blank file removed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "walk-shot-"));
   const { host } = fakeHost([0, 0]);
-  await assert.rejects(takeEditorShot(host, { exe: "Editor.exe", dir, name: "x", tries: 2, sleep: noSleep }), (e: Error) => {
+  await assert.rejects(takeEditorShot(host, { app: "Editor.exe", dir, name: "x", tries: 2, sleep: noSleep }), (e: Error) => {
     assert.ok(e instanceof ShotError);
     assert.match(e.message, /blank/);
     return true;
@@ -73,13 +73,13 @@ test("after the last blank try the shot is refused and the blank file removed", 
 test("a covered editor is never shot from the screen: the tool refuses", async () => {
   const dir = await mkdtemp(join(tmpdir(), "walk-shot-"));
   const { host } = fakeHost(["covered", "covered", "covered"]);
-  await assert.rejects(takeEditorShot(host, { exe: "Editor.exe", dir, name: "x", sleep: noSleep }), /covered by another window/);
+  await assert.rejects(takeEditorShot(host, { app: "Editor.exe", dir, name: "x", sleep: noSleep }), /covered by another window/);
 });
 
 test("no editor window: a clear error, no shot", async () => {
   const dir = await mkdtemp(join(tmpdir(), "walk-shot-"));
   const { host, calls } = fakeHost([100], false);
-  await assert.rejects(takeEditorShot(host, { exe: "Editor.exe", dir, name: "x", sleep: noSleep }), /is the editor running/);
+  await assert.rejects(takeEditorShot(host, { app: "Editor.exe", dir, name: "x", sleep: noSleep }), /is the editor running/);
   assert.deepEqual(calls, ["find Editor.exe"]);
 });
 
@@ -96,5 +96,5 @@ test("a point on a half-size shot maps back to the screen", () => {
 
 test("scale outside (0, 1] is refused", async () => {
   const { host } = fakeHost([100]);
-  await assert.rejects(takeEditorShot(host, { exe: "e.exe", dir: tmpdir(), name: "x", scale: 2 }), /scale/);
+  await assert.rejects(takeEditorShot(host, { app: "e.exe", dir: tmpdir(), name: "x", scale: 2 }), /scale/);
 });

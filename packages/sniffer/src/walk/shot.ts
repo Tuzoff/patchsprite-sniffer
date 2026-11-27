@@ -6,8 +6,8 @@ import { join } from "node:path";
 import type { Rect, WindowHost } from "./host.ts";
 
 export interface ShotOptions {
-  /** The editor's executable name, such as "Editor.exe". */
-  exe: string;
+  /** The editor, as the window host names it (on Windows its executable name, such as "Editor.exe"). */
+  app: string;
   /** Folder the screenshots go to. */
   dir: string;
   /** Name of the shot, without extension; made safe for a file name. */
@@ -60,8 +60,8 @@ export async function takeEditorShot(host: WindowHost, o: ShotOptions): Promise<
   let last = "";
   for (let i = 1; i <= tries; i++) {
     if (i > 1) await sleep(o.retryDelayMs ?? 400);
-    const win = await host.find(o.exe);
-    if (!win.found) throw new ShotError(`no window of ${o.exe}: is the editor running?`);
+    const win = await host.find(o.app);
+    if (!win.found) throw new ShotError(`no window of ${o.app}: is the editor running?`);
     await host.front(win.hwnd);
     const res = await host.shot(win.hwnd, path, scale, minSpread);
     if (res.saved && res.spread >= minSpread && res.width) {

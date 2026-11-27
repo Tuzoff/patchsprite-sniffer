@@ -145,7 +145,7 @@ function Invoke-Op($req) {
   switch ($req.op) {
     'ping' { return @{} }
     'find' {
-      $h = Find-Editor $req.exe
+      $h = Find-Editor $req.app
       if ($h -eq [IntPtr]::Zero) { return @{ found = $false } }
       $wpid = [uint32]0; [void][WalkWin]::GetWindowThreadProcessId($h, [ref]$wpid)
       return @{ found = $true; hwnd = [int64]$h; pid = $wpid; rect = (Rect-Json (Get-Rect $h)); minimized = [WalkWin]::IsIconic($h) }

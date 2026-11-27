@@ -24,7 +24,7 @@ test("the window host finds, fronts and shoots a real window at half size", asyn
   }
   assert.ok(win.found, "notepad's window appears");
   const dir = await mkdtemp(join(tmpdir(), "walk-host-"));
-  const shot = await takeEditorShot(host, { exe: "notepad.exe", dir, name: "notepad" });
+  const shot = await takeEditorShot(host, { app: "notepad.exe", dir, name: "notepad" });
   assert.deepEqual((await readFile(shot.path)).subarray(0, 4), PNG);
   assert.ok(Math.abs(shot.width - shot.window.width / 2) <= 1, `half width: ${shot.width} of ${shot.window.width}`);
   t.diagnostic(`tries ${shot.tries}, window ${shot.window.width}x${shot.window.height}`);

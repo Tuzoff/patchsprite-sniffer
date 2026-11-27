@@ -32,7 +32,9 @@ export interface ShotResult {
 
 /** What the walk tools need from the window system. */
 export interface WindowHost {
-  find(exe: string): Promise<FoundWindow | { found: false }>;
+  /** The editor's main window. `app` names the editor: its executable name on Windows (such as "Editor.exe"); a
+   * macOS host would take its bundle id. */
+  find(app: string): Promise<FoundWindow | { found: false }>;
   front(hwnd: number): Promise<{ front: boolean }>;
   shot(hwnd: number, path: string, scale: number, minSpread: number): Promise<ShotResult>;
   close(): void;
@@ -91,8 +93,8 @@ export class PowerShellHost implements WindowHost {
     });
   }
 
-  async find(exe: string) {
-    return (await this.#call("find", { exe })) as unknown as FoundWindow | { found: false };
+  async find(app: string) {
+    return (await this.#call("find", { app })) as unknown as FoundWindow | { found: false };
   }
 
   async front(hwnd: number) {
