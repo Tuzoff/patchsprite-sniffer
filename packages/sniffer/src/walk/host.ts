@@ -38,7 +38,7 @@ export type InputResult = { done: true } | { done: false; owner: string };
 export type ElementResult = { found: false } | { found: true; element: UiElement };
 
 /** The focused control, plus the caption of the default button (the one Enter presses) of the dialog in front, if any. */
-export type FocusedResult = ElementResult & { defaultButton?: string };
+export type FocusedResult = ElementResult & { defaultButton?: string; /** The dialog in front didn't say which its default button is. */ dialogHung?: boolean };
 
 export interface UiElement {
   name: string;

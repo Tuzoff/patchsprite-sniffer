@@ -172,6 +172,7 @@ async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, 
   const at = await host.focused(pid);
   refuseIfHazard(at, `step ${n + 1} (${what}) refused: the focused control is`);
   // Enter in a dialog presses its default button, whichever control has the focus.
+  if (enter && at.dialogHung) throw new InputError(`step ${n + 1} (${what}) refused: the dialog in front isn't answering, so what Enter would press is unknown. Take a screenshot and try again`);
   if (enter && at.defaultButton) refuseIfHazardName(at.defaultButton, `step ${n + 1} (${what}) refused: Enter would press the dialog's default button`);
 }
 

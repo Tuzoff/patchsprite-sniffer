@@ -153,6 +153,8 @@ test("enter is refused when the dialog in front would press a hazard default but
   await assert.rejects(run(dlg.host, ["key:enter"]), /default button "Update Firmware"/);
   await run(dlg.host, ["key:space", "key:tab"]);
   await run(dlg.host, ["key:enter"], true);
+  const hung = inputHost(0, { focused: async () => ({ ...gain, dialogHung: true }) });
+  await assert.rejects(run(hung.host, ["key:enter"]), /isn't answering/);
   assert.equal(dlg.log.filter((l) => l.startsWith("keys")).length, 3, "space and tab press the focused control, not the default button");
   const btn = inputHost(0, { focused: async () => ({ found: true as const, element: { ...gain.element, name: "Delete", controlType: "Button" } }) });
   await assert.rejects(run(btn.host, ["type:a b"]), /focused control is "Delete"/);
