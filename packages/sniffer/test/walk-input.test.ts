@@ -159,6 +159,7 @@ test("enter is refused when the dialog in front would press a hazard default but
   await run(btn.host, ["type:ab"]);
   assert.throws(() => parseStep("type:a\nb"), /one line of text/);
   assert.throws(() => parseStep("type:a\tb"), /one line of text/);
+  assert.throws(() => parseStep("type:a\bb"), /one line of text/);
 });
 
 test("no editor window: input is refused", async () => {

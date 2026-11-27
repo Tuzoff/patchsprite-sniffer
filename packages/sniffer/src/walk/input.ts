@@ -74,8 +74,9 @@ export function parseStep(s: string): Step {
       return { op, combo: arg };
     case "type":
       if (!arg) throw new InputError(`"${s}": type needs text`);
-      // A typed line break or tab can press a button or move the focus onto one; use key:enter or key:tab for those.
-      if (/[\r\n\t]/.test(arg)) throw new InputError(`"${s}": type takes one line of text; use key:enter or key:tab between steps`);
+      // A typed line break, tab or other control character can press a button, move the focus onto one or delete;
+      // use key:enter, key:tab or key:backspace for those.
+      if (/[\x00-\x1f\x7f]/.test(arg)) throw new InputError(`"${s}": type takes one line of text; use key:enter or key:tab between steps`);
       return { op, text: arg };
     case "wait": {
       const [seconds] = nums(1);
@@ -141,9 +142,8 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
         if (step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, { op: step.op, x: step.x1, y: step.y1 }, n);
         // Enter, space, delete and backspace act on whatever control has the focus, so they are checked like a click on it.
-        if (step.op === "key" && PRESS_KEYS.some((k) => keyCodes(step.combo).includes(k))) {
-          await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, keyCodes(step.combo).includes(KEYS.enter), n);
-        }
+        const codes = step.op === "key" ? keyCodes(step.combo) : [];
+        if (step.op === "key" && PRESS_KEYS.some((k) => codes.includes(k))) await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, codes.includes(KEYS.enter), n);
         // A typed space presses a focused button too.
         if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
       }
