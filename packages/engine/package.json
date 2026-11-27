@@ -8,9 +8,14 @@
     "node": ">=22.18"
   },
   "exports": {
+    "./canonical-json": "./src/canonical-json.ts",
     "./capture": "./src/capture.ts",
-    "./seed-patch": "./src/seed-patch.ts",
-    "./canonical-json": "./src/canonical-json.ts"
+    "./data-dir": "./src/data-dir.ts",
+    "./pedal-lock": "./src/pedal-lock.ts",
+    "./seed-patch": "./src/seed-patch.ts"
+  },
+  "bin": {
+    "pedal-lock": "./bin/pedal-lock.ts"
   },
   "dependencies": {
     "zod": "4.6.7"
