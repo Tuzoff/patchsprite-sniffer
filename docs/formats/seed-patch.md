@@ -132,7 +132,7 @@ reads it (map-checks.md, "Fingerprints"); it is not merged into the base one.
 
 ## Modes
 
-A map with `modes` keeps some entries apart per mode (closed-repo map checks, draft PR 93). A change says which mode
+A map with `modes` keeps some entries apart per mode. A change says which mode
 the unit was in when its evidence was seen (`mode`), and when a patch is applied that mode is checked against the map
 as the reviewer saw it:
 
@@ -279,9 +279,10 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
   counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
   a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
-  whose payload another change edits. Given the app's block separations (`reviewReasons(patch, map, { separations })`,
-  the app's `blockSeparations`, which loads the map), the reason names each pair the change touches and how its
-  separation changes from the base map to the map the whole patch leaves: a send that now shares a blocked cmd
+  whose payload another change edits. A caller may pass an optional function that gives a map's block separations
+  (`reviewReasons(patch, map, { separations })`, each a send, the blocked message it shares a cmd with and what keeps
+  them apart). The reason then names each pair the change touches and how its separation changes from the base map
+  to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now shares a blocked cmd
   ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that still holds. Without
   them, or when a map doesn't load, the reason is the plain one;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules

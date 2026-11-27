@@ -624,7 +624,7 @@ test("a slot pedal's parameters are keyed by effect type: param/<type>/<id> find
   assert.deepEqual(reviewReasons(patch(map, reset), map), []);
 });
 
-test("with the app's block separations, a change that may lift a block names the pair and what keeps them apart", () => {
+test("with block separations from the caller, a change that may lift a block names the pair and what keeps them apart", () => {
   const pin = (v: number) => ({ fields: [{ name: "magic", type: "u8", const: v }] });
   const base = seed();
   Object.assign(base.messages, { factoryReset: { cmd: "7f", dir: "send", payload: pin(1) }, storeScene: { cmd: "7f", dir: "send", payload: "scene" } });
@@ -700,4 +700,20 @@ test("with the app's block separations, a change that may lift a block names the
   assert.equal(lifts.length, 9);
   assert.equal(lifts[0], "may lift a block: a?b is kept apart from the blocked factoryReset by x");
   assert.equal(lifts[8], "may lift a block: and 3 more pairs");
+
+  // a change's notes weigh it accepted alone: here the two together keep the pair apart, but the layout edit alone
+  // leaves nothing between them, a map that doesn't load, so it keeps the plain reason
+  const strict = (map: any) => {
+    const list = separations(map);
+    if (list.some((s) => /(\w+) vs \1$/.test(s.by))) throw new Error("a send matches a blocked message");
+    return list;
+  };
+  const both = withChanges(
+    { ...edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 1, was: fingerprint(2) }), id: "a" },
+    { ...edit("factoryReset", { op: "replace", path: "/messages/factoryReset/payload/fields/0/const", value: 5, was: fingerprint(1) }), id: "b" },
+  );
+  assert.deepEqual(reviewReasons(both, base, { separations: strict }), [
+    { change: "a", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+    { change: "b", reason: "may lift a block: what keeps storeScene apart from the blocked factoryReset moves from byte 0: 02 vs 01 to byte 0: 02 vs 05" },
+  ]);
 });
