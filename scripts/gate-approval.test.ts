@@ -30,8 +30,8 @@ test("the gate files: .github, .claude, the check scripts, the CLA and the licen
   assert.equal(gateFiles([{ filename: "scripts/schemas.ts", patch: "" }]).length, 0);
 });
 
-test("only a maintainer may approve permissions, secrets, triggers, this check and unseen diffs", () => {
-  for (const line of ["+permissions:", "+  contents: write", "-  pull-requests: read", "+  pull_request_target:", "+  workflow_run:", "+  X: ${{ secrets.T }}", "+permissions: write-all", "+  id-token: 'write'", "+  contents: \"write\"", "+on: [workflow_run]", "+  issue_comment:", "+        secrets: inherit", "+      GH_TOKEN: ${{ github.token }}", "+      persist-credentials: true"]) {
+test("only a maintainer may approve write grants, removed permissions keys, secrets, triggers, this check and unseen diffs", () => {
+  for (const line of ["+  contents: write", "+      contents:\n+        write", "-permissions: read-all", "-    permissions:", "-      persist-credentials: false", "+  x: *anchor", "+  \"pull_\\x72equest_target\": {}", "+  pull_request_target:", "+  workflow_run:", "+  X: ${{ secrets.T }}", "+permissions: write-all", "+  id-token: 'write'", "+  contents: \"write\"", "+on: [workflow_run]", "+  issue_comment:", "+        secrets: inherit", "+      GH_TOKEN: ${{ github.token }}", "+      persist-credentials: true", "+      contents: !!str write", "+      contents: \"wr\\\n+        ite\"", "+      X: \"${{ sec\\\n+        rets.T }}\"", "+++ ${{ secrets.T }}", "--- persist-credentials: false"]) {
     assert.notEqual(humanOnly([wf(`@@ -1 +1 @@\n${line}`)]), "", line);
   }
   assert.notEqual(humanOnly([{ filename: ".github/workflows/gate-approval.yml", patch: "@@\n+# a comment" }]), "");
@@ -39,9 +39,26 @@ test("only a maintainer may approve permissions, secrets, triggers, this check a
   assert.notEqual(humanOnly([{ filename: ".claude/settings.json", patch: "@@\n+{}" }]), "");
   assert.notEqual(humanOnly([{ filename: ".github/workflows/big.yml" }]), "", "no diff shown");
   assert.equal(humanOnly([wf("@@ -1 +1 @@\n   permissions: read\n-  node-version: 20\n+  node-version: 22")]), "", "an unchanged context line");
-  const f = [wf("@@ -1 +1 @@\n+permissions: {}")];
+  const f = [wf("@@ -1 +1 @@\n+  contents: write")];
   assert.equal(decide(f, ["ai-gate-approved"], [labeled("ai-gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, false);
   assert.equal(decide(f, ["gate-approved"], [labeled("gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true);
+});
+
+test("a new workflow needs a top-level permissions key, or the maintainer", () => {
+  const added = (patch: string, extra: Partial<ChangedFile> = {}) =>
+    humanOnly([{ filename: ".github/workflows/new.yml", status: "added", patch: `@@ -0,0 +1,3 @@\n${patch}`, ...extra }]);
+  assert.notEqual(added("+on: push\n+jobs:\n+  a:\n+    permissions: {}"), "", "only a job-level key");
+  assert.equal(added("+on: push\n+permissions: {}\n+jobs: {}"), "", "a top-level key");
+  assert.notEqual(added("+on: push", { status: "renamed", previous_filename: "docs/old.yml" }), "", "moved in from where it never ran");
+  assert.equal(humanOnly([wf("@@ -1 +1 @@\n+  timeout-minutes: 5")]), "", "an edit of an existing workflow");
+});
+
+test("read-only and narrowing permission lines are the reviewer's (27 Nov 2026)", () => {
+  for (const line of ["+permissions: {}", "+permissions:\n+  contents: read", "+  issues: none", "-  pull-requests: read", "-  contents: write", "+permissions: read-all", "+  # write access is not needed here"]) {
+    assert.equal(humanOnly([wf(`@@ -1 +1 @@\n${line}`)]), "", line);
+  }
+  const f = [wf("@@ -1 +1 @@\n+permissions: {}")];
+  assert.equal(decide(f, ["ai-gate-approved"], [labeled("ai-gate-approved", "2026-11-27T18:00:01Z")], PUSH).ok, true);
 });
 
 test("a push is dated by the current head's unbroken streak of runs, so A, B, A again dates A from its return", () => {
