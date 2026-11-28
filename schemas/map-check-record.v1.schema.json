@@ -33,6 +33,7 @@
         "confirms",
         "decodes",
         "player-confirms",
+        "unverifiable",
         "settles",
         "contradicts",
         "reopens",
@@ -40,7 +41,9 @@
         "disagrees",
         "skipped",
         "retried",
-        "answered-on-resend"
+        "answered-on-resend",
+        "froze",
+        "unblocked"
       ]
     },
     "how": {

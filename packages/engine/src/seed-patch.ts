@@ -8,7 +8,7 @@ import { z } from "zod";
 import { canonicalJson, fingerprint } from "./canonical-json.ts";
 import { BlockedCmds } from "./cmd-overlap.ts";
 import { MEASURED_FIELDS } from "./measured-fields.ts";
-import { measuredFieldSchema, type MeasuredField } from "./protocol-schema.ts";
+import { measuredFieldSchema, type BlockSeparation, type MeasuredField } from "./protocol-schema.ts";
 
 export const SEED_PATCH_FORMAT = "patchsprite-seed-patch";
 export const SEED_PATCH_VERSION = 1;
@@ -665,13 +665,7 @@ const LIFT_BLOCK = "may lift a block";
  * new there or rests on something else, and a mode only for a pair its stand-ins make new or move (in the base map, or
  * in `firmware`'s view of it).
  */
-export interface BlockSeparation {
-  firmware?: string;
-  mode?: string;
-  send: string;
-  blocked: string;
-  by: string;
-}
+export type { BlockSeparation } from "./protocol-schema.ts";
 
 export interface ReviewOptions {
   /**

@@ -226,7 +226,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -274,7 +275,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -329,7 +331,8 @@
                     },
                     "measuredOn": {
                       "type": "string",
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "date": {
                       "anyOf": [
@@ -500,7 +503,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -548,7 +552,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -603,7 +608,8 @@
                     },
                     "measuredOn": {
                       "type": "string",
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "date": {
                       "anyOf": [
@@ -787,7 +793,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -835,7 +842,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -890,7 +898,8 @@
                     },
                     "measuredOn": {
                       "type": "string",
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "date": {
                       "anyOf": [
@@ -961,6 +970,42 @@
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 15
+                },
+                "identityDeviceId": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "doc",
+                            "player-confirmed",
+                            "wire",
+                            "device-reported",
+                            "read-back",
+                            "replay-verified",
+                            "test"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 512,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "source"
+                  ],
+                  "additionalProperties": false
                 },
                 "terminator": {
                   "type": "string",
@@ -1071,7 +1116,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -1119,7 +1165,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -1174,7 +1221,8 @@
                     },
                     "measuredOn": {
                       "type": "string",
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "date": {
                       "anyOf": [
@@ -1296,7 +1344,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -1344,7 +1393,8 @@
                         },
                         "measuredOn": {
                           "type": "string",
-                          "maxLength": 256
+                          "maxLength": 256,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         },
                         "date": {
                           "anyOf": [
@@ -1399,7 +1449,8 @@
                     },
                     "measuredOn": {
                       "type": "string",
-                      "maxLength": 256
+                      "maxLength": 256,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "date": {
                       "anyOf": [
@@ -1543,7 +1594,8 @@
                             },
                             "note": {
                               "type": "string",
-                              "maxLength": 1024
+                              "maxLength": 1024,
+                              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                             },
                             "type": {
                               "type": "string",
@@ -1613,6 +1665,34 @@
                               "type": "string",
                               "maxLength": 64,
                               "pattern": "^[a-z][A-Za-z0-9]*$"
+                            },
+                            "enumBy": {
+                              "type": "object",
+                              "properties": {
+                                "field": {
+                                  "type": "string",
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                                },
+                                "enums": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][a-z0-9_]*$"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "maxLength": 64,
+                                    "pattern": "^[a-z][A-Za-z0-9]*$"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "field",
+                                "enums"
+                              ],
+                              "additionalProperties": false
                             },
                             "allowed": {
                               "maxItems": 4096,
@@ -1695,6 +1775,22 @@
                               "type": "string",
                               "maxLength": 64,
                               "pattern": "^[a-z][A-Za-z0-9]*$"
+                            },
+                            "address": {
+                              "type": "object",
+                              "properties": {
+                                "stride": {
+                                  "type": "string",
+                                  "maxLength": 12288,
+                                  "pattern": "^[0-9a-f]{2}( [0-9a-f]{2})*$"
+                                },
+                                "table": {
+                                  "type": "string",
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                                }
+                              },
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -1747,7 +1843,8 @@
                             },
                             "note": {
                               "type": "string",
-                              "maxLength": 1024
+                              "maxLength": 1024,
+                              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                             },
                             "type": {
                               "type": "string",
@@ -1820,7 +1917,8 @@
                             },
                             "note": {
                               "type": "string",
-                              "maxLength": 1024
+                              "maxLength": 1024,
+                              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                             },
                             "type": {
                               "type": "string",
@@ -1891,7 +1989,8 @@
                             },
                             "note": {
                               "type": "string",
-                              "maxLength": 1024
+                              "maxLength": 1024,
+                              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                             },
                             "type": {
                               "type": "string",
@@ -2049,6 +2148,11 @@
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 60000
+                          },
+                          "step": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65536
                           }
                         },
                         "required": [
@@ -2058,7 +2162,8 @@
                       },
                       "note": {
                         "type": "string",
-                        "maxLength": 1024
+                        "maxLength": 1024,
+                        "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                       }
                     },
                     "required": [
@@ -2234,6 +2339,11 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 60000
+                  },
+                  "step": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
                   }
                 },
                 "required": [
@@ -2320,7 +2430,8 @@
               "ref": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 512
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
               }
             },
             "required": [
@@ -2328,9 +2439,135 @@
             ],
             "additionalProperties": false
           },
+          "safeRead": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": true
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "fields": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "args": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "readBack": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z][A-Za-z0-9]*$"
+              },
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[a-z][A-Za-z0-9]*$"
+                  },
+                  "inputs": {
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "request": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        },
+                        "send": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        }
+                      },
+                      "required": [
+                        "request",
+                        "send"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "compare": {
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "reply": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        },
+                        "send": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        }
+                      },
+                      "required": [
+                        "reply",
+                        "send"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "request"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
           "note": {
             "type": "string",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
           }
         },
         "required": [
@@ -2414,7 +2651,8 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "type": {
                       "type": "string",
@@ -2484,6 +2722,34 @@
                       "type": "string",
                       "maxLength": 64,
                       "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    "enumBy": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        },
+                        "enums": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          },
+                          "additionalProperties": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "pattern": "^[a-z][A-Za-z0-9]*$"
+                          }
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "enums"
+                      ],
+                      "additionalProperties": false
                     },
                     "allowed": {
                       "maxItems": 4096,
@@ -2566,6 +2832,22 @@
                       "type": "string",
                       "maxLength": 64,
                       "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    "address": {
+                      "type": "object",
+                      "properties": {
+                        "stride": {
+                          "type": "string",
+                          "maxLength": 12288,
+                          "pattern": "^[0-9a-f]{2}( [0-9a-f]{2})*$"
+                        },
+                        "table": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -2618,7 +2900,8 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "type": {
                       "type": "string",
@@ -2691,7 +2974,8 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "type": {
                       "type": "string",
@@ -2762,7 +3046,8 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     },
                     "type": {
                       "type": "string",
@@ -2920,6 +3205,11 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 60000
+                  },
+                  "step": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
                   }
                 },
                 "required": [
@@ -2929,7 +3219,8 @@
               },
               "note": {
                 "type": "string",
-                "maxLength": 1024
+                "maxLength": 1024,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
               }
             },
             "required": [
@@ -3032,7 +3323,8 @@
               },
               "label": {
                 "type": "string",
-                "maxLength": 256
+                "maxLength": 256,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
               },
               "group": {
                 "type": "string",
@@ -3101,7 +3393,8 @@
                 },
                 "additionalProperties": {
                   "type": "string",
-                  "maxLength": 256
+                  "maxLength": 256,
+                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                 }
               },
               "writable": {
@@ -3262,7 +3555,8 @@
               },
               "label": {
                 "type": "string",
-                "maxLength": 256
+                "maxLength": 256,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
               },
               "on": {
                 "type": "integer",
@@ -3352,6 +3646,27 @@
         "pattern": "^[a-z][A-Za-z0-9]*$"
       }
     },
+    "addresses": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "^[a-z][A-Za-z0-9]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "maxLength": 12288,
+          "pattern": "^[0-9a-f]{2}( [0-9a-f]{2})*$"
+        }
+      }
+    },
     "safety": {
       "type": "object",
       "properties": {
@@ -3371,7 +3686,8 @@
             "reason": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 512
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
             }
           },
           "required": [
@@ -3400,7 +3716,8 @@
             "reason": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 512
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
             }
           },
           "required": [
@@ -3415,7 +3732,8 @@
           "type": "array",
           "items": {
             "type": "string",
-            "maxLength": 200
+            "maxLength": 200,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
           }
         }
       },
@@ -3431,7 +3749,15 @@
         "deviceName": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 64
+          "maxLength": 64,
+          "allOf": [
+            {
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+            },
+            {
+              "pattern": "^[\\p{L}\\p{N}](?:[\\p{L}\\p{N} .,!'&+()/_®™-]|(?<=\\S):(?=\\S))*$"
+            }
+          ]
         },
         "patchLabel": {
           "type": "object",
@@ -3477,18 +3803,27 @@
         "emptyPatchName": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 64
+          "maxLength": 64,
+          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
         },
         "defaultSceneName": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 64
+          "maxLength": 64,
+          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
         },
         "sceneLabel": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "pattern": "\\{n\\}"
+          "allOf": [
+            {
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+            },
+            {
+              "pattern": "\\{n\\}"
+            }
+          ]
         },
         "channelNames": {
           "type": "string",
@@ -3537,7 +3872,8 @@
             },
             "calibratedOn": {
               "type": "string",
-              "maxLength": 256
+              "maxLength": 256,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
             },
             "toleranceDb": {
               "type": "number",
@@ -3650,7 +3986,8 @@
               "additionalProperties": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 64
+                "maxLength": 64,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
               }
             },
             "overhead": {
@@ -3667,7 +4004,8 @@
                 },
                 "measuredOn": {
                   "type": "string",
-                  "maxLength": 256
+                  "maxLength": 256,
+                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                 },
                 "date": {
                   "anyOf": [
@@ -3758,12 +4096,14 @@
               {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 64
+                "maxLength": 64,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
               },
               {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 64
+                "maxLength": 64,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
               }
             ],
             "items": false,
@@ -3801,7 +4141,8 @@
                 },
                 "measuredOn": {
                   "type": "string",
-                  "maxLength": 256
+                  "maxLength": 256,
+                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                 },
                 "date": {
                   "anyOf": [
@@ -3846,6 +4187,120 @@
         "midiPort",
         "usb",
         "vendorApps"
+      ],
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "manufacturer": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string",
+          "pattern": "^[0-7][0-9a-f]( [0-7][0-9a-f]){1}$"
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[0-7][0-9a-f]( [0-7][0-9a-f]){1}$"
+        },
+        "firmware": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "ascii"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "major": {
+                  "minItems": 1,
+                  "maxItems": 2,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  }
+                },
+                "minor": {
+                  "minItems": 1,
+                  "maxItems": 2,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  }
+                }
+              },
+              "required": [
+                "major",
+                "minor"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capture",
+                "device-reported",
+                "vendor-doc",
+                "community-table"
+              ]
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        "firmwareSource": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capture",
+                "device-reported",
+                "vendor-doc",
+                "community-table"
+              ]
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+        }
+      },
+      "required": [
+        "manufacturer",
+        "family"
       ],
       "additionalProperties": false
     },
@@ -3900,7 +4355,8 @@
                 "propertyNames": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 64
+                  "maxLength": 64,
+                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                 },
                 "additionalProperties": {
                   "type": "object",
@@ -3929,7 +4385,8 @@
                       "additionalProperties": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 64
+                        "maxLength": 64,
+                        "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                       }
                     },
                     "min": {
@@ -3970,7 +4427,8 @@
                         "ref": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 512
+                          "maxLength": 512,
+                          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                         }
                       },
                       "required": [
@@ -3980,12 +4438,122 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     }
                   },
                   "required": [
                     "id",
                     "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "linked": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "params": {
+                      "minItems": 2,
+                      "maxItems": 256,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+                      }
+                    },
+                    "commit": {
+                      "type": "string",
+                      "enum": [
+                        "last",
+                        "each"
+                      ]
+                    },
+                    "rules": {
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "ascending"
+                              },
+                              "params": {
+                                "minItems": 2,
+                                "maxItems": 256,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64,
+                                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+                                }
+                              },
+                              "strict": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "distinct"
+                              },
+                              "params": {
+                                "minItems": 2,
+                                "maxItems": 256,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64,
+                                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+                                }
+                              },
+                              "repeatable": {
+                                "maxItems": 64,
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "note": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+                    }
+                  },
+                  "required": [
+                    "params",
+                    "commit"
                   ],
                   "additionalProperties": false
                 }
@@ -4004,6 +4572,76 @@
       ],
       "additionalProperties": false
     },
+    "hazards": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+          },
+          "values": {
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "why"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "cautions": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+          },
+          "about": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+            }
+          }
+        },
+        "required": [
+          "why"
+        ],
+        "additionalProperties": false
+      }
+    },
     "controls": {
       "type": "object",
       "properties": {
@@ -4021,7 +4659,8 @@
             "where": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 256
+              "maxLength": 256,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
             }
           },
           "required": [
@@ -4053,7 +4692,8 @@
                   "label": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 64
+                    "maxLength": 64,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                   },
                   "group": {
                     "type": "string",
@@ -4114,7 +4754,8 @@
                   },
                   "note": {
                     "type": "string",
-                    "maxLength": 1024
+                    "maxLength": 1024,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                   }
                 },
                 "required": [
@@ -4133,7 +4774,8 @@
                   "label": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 64
+                    "maxLength": 64,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                   },
                   "group": {
                     "type": "string",
@@ -4194,7 +4836,8 @@
                   },
                   "note": {
                     "type": "string",
-                    "maxLength": 1024
+                    "maxLength": 1024,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                   }
                 },
                 "required": [
@@ -4234,7 +4877,8 @@
                   "label": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 64
+                    "maxLength": 64,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
                   },
                   "group": {
                     "type": "string",
@@ -4295,7 +4939,8 @@
                   },
                   "note": {
                     "type": "string",
-                    "maxLength": 1024
+                    "maxLength": 1024,
+                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                   }
                 },
                 "required": [
@@ -4338,7 +4983,8 @@
             },
             "note": {
               "type": "string",
-              "maxLength": 1024
+              "maxLength": 1024,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
             }
           },
           "required": [
@@ -4367,7 +5013,8 @@
           "what": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 128
+            "maxLength": 128,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
           },
           "readBy": {
             "type": "string",
@@ -4377,7 +5024,8 @@
           "settle": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 256
+            "maxLength": 256,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
           },
           "options": {
             "type": "object",
@@ -4421,7 +5069,8 @@
               "ref": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 512
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
               }
             },
             "required": [
@@ -4431,7 +5080,8 @@
           },
           "note": {
             "type": "string",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
           }
         },
         "required": [
@@ -4451,12 +5101,163 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 16
+            "maxLength": 16,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
           }
         }
       },
       "required": [
         "slots"
+      ],
+      "additionalProperties": false
+    },
+    "modes": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][A-Za-z0-9]*$"
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}\\t\\n]*$"
+            }
+          },
+          "required": [
+            "message",
+            "field"
+          ],
+          "additionalProperties": false
+        },
+        "use": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "messages": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "layouts": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "enums": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "constants": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "groups": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
+        }
+      },
+      "required": [
+        "read",
+        "use"
       ],
       "additionalProperties": false
     },
@@ -4501,7 +5302,8 @@
               },
               "note": {
                 "type": "string",
-                "maxLength": 1024
+                "maxLength": 1024,
+                "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
               }
             },
             "additionalProperties": false
@@ -4523,6 +5325,20 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "pattern": "^[Vv]?\\d{1,9}(\\.\\d{1,9}){0,3}$"
+              },
+              "below": {
+                "type": "string",
+                "pattern": "^[Vv]?\\d{1,9}(\\.\\d{1,9}){0,3}$"
+              }
+            },
+            "additionalProperties": false
+          },
           "messages": {
             "type": "object",
             "propertyNames": {
@@ -4615,7 +5431,8 @@
                                   },
                                   "note": {
                                     "type": "string",
-                                    "maxLength": 1024
+                                    "maxLength": 1024,
+                                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                                   },
                                   "type": {
                                     "type": "string",
@@ -4685,6 +5502,34 @@
                                     "type": "string",
                                     "maxLength": 64,
                                     "pattern": "^[a-z][A-Za-z0-9]*$"
+                                  },
+                                  "enumBy": {
+                                    "type": "object",
+                                    "properties": {
+                                      "field": {
+                                        "type": "string",
+                                        "maxLength": 64,
+                                        "pattern": "^[a-z][A-Za-z0-9]*$"
+                                      },
+                                      "enums": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string",
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z][a-z0-9_]*$"
+                                        },
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "field",
+                                      "enums"
+                                    ],
+                                    "additionalProperties": false
                                   },
                                   "allowed": {
                                     "maxItems": 4096,
@@ -4767,6 +5612,22 @@
                                     "type": "string",
                                     "maxLength": 64,
                                     "pattern": "^[a-z][A-Za-z0-9]*$"
+                                  },
+                                  "address": {
+                                    "type": "object",
+                                    "properties": {
+                                      "stride": {
+                                        "type": "string",
+                                        "maxLength": 12288,
+                                        "pattern": "^[0-9a-f]{2}( [0-9a-f]{2})*$"
+                                      },
+                                      "table": {
+                                        "type": "string",
+                                        "maxLength": 64,
+                                        "pattern": "^[a-z][A-Za-z0-9]*$"
+                                      }
+                                    },
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": [
@@ -4819,7 +5680,8 @@
                                   },
                                   "note": {
                                     "type": "string",
-                                    "maxLength": 1024
+                                    "maxLength": 1024,
+                                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                                   },
                                   "type": {
                                     "type": "string",
@@ -4892,7 +5754,8 @@
                                   },
                                   "note": {
                                     "type": "string",
-                                    "maxLength": 1024
+                                    "maxLength": 1024,
+                                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                                   },
                                   "type": {
                                     "type": "string",
@@ -4963,7 +5826,8 @@
                                   },
                                   "note": {
                                     "type": "string",
-                                    "maxLength": 1024
+                                    "maxLength": 1024,
+                                    "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                                   },
                                   "type": {
                                     "type": "string",
@@ -5121,6 +5985,11 @@
                                   "type": "integer",
                                   "minimum": 1,
                                   "maximum": 60000
+                                },
+                                "step": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 65536
                                 }
                               },
                               "required": [
@@ -5130,7 +5999,8 @@
                             },
                             "note": {
                               "type": "string",
-                              "maxLength": 1024
+                              "maxLength": 1024,
+                              "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                             }
                           },
                           "required": [
@@ -5306,6 +6176,11 @@
                           "type": "integer",
                           "minimum": 1,
                           "maximum": 60000
+                        },
+                        "step": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65536
                         }
                       },
                       "required": [
@@ -5392,7 +6267,8 @@
                     "ref": {
                       "type": "string",
                       "minLength": 1,
-                      "maxLength": 512
+                      "maxLength": 512,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     }
                   },
                   "required": [
@@ -5400,9 +6276,135 @@
                   ],
                   "additionalProperties": false
                 },
+                "safeRead": {
+                  "anyOf": [
+                    {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "fields": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "pattern": "^[a-z][A-Za-z0-9]*$"
+                          },
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "maxLength": 64
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "args": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string",
+                            "maxLength": 64,
+                            "pattern": "^[a-z][A-Za-z0-9]*$"
+                          },
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 255
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "readBack": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][A-Za-z0-9]*$"
+                    },
+                    {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "request": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-z][A-Za-z0-9]*$"
+                        },
+                        "inputs": {
+                          "maxItems": 16,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "request": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              },
+                              "send": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              }
+                            },
+                            "required": [
+                              "request",
+                              "send"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "compare": {
+                          "minItems": 1,
+                          "maxItems": 16,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "reply": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              },
+                              "send": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              }
+                            },
+                            "required": [
+                              "reply",
+                              "send"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "request"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
                 "note": {
                   "type": "string",
-                  "maxLength": 1024
+                  "maxLength": 1024,
+                  "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                 }
               },
               "required": [
@@ -5486,7 +6488,8 @@
                           },
                           "note": {
                             "type": "string",
-                            "maxLength": 1024
+                            "maxLength": 1024,
+                            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                           },
                           "type": {
                             "type": "string",
@@ -5556,6 +6559,34 @@
                             "type": "string",
                             "maxLength": 64,
                             "pattern": "^[a-z][A-Za-z0-9]*$"
+                          },
+                          "enumBy": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              },
+                              "enums": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string",
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "additionalProperties": {
+                                  "type": "string",
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z][A-Za-z0-9]*$"
+                                }
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "enums"
+                            ],
+                            "additionalProperties": false
                           },
                           "allowed": {
                             "maxItems": 4096,
@@ -5638,6 +6669,22 @@
                             "type": "string",
                             "maxLength": 64,
                             "pattern": "^[a-z][A-Za-z0-9]*$"
+                          },
+                          "address": {
+                            "type": "object",
+                            "properties": {
+                              "stride": {
+                                "type": "string",
+                                "maxLength": 12288,
+                                "pattern": "^[0-9a-f]{2}( [0-9a-f]{2})*$"
+                              },
+                              "table": {
+                                "type": "string",
+                                "maxLength": 64,
+                                "pattern": "^[a-z][A-Za-z0-9]*$"
+                              }
+                            },
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -5690,7 +6737,8 @@
                           },
                           "note": {
                             "type": "string",
-                            "maxLength": 1024
+                            "maxLength": 1024,
+                            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                           },
                           "type": {
                             "type": "string",
@@ -5763,7 +6811,8 @@
                           },
                           "note": {
                             "type": "string",
-                            "maxLength": 1024
+                            "maxLength": 1024,
+                            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                           },
                           "type": {
                             "type": "string",
@@ -5834,7 +6883,8 @@
                           },
                           "note": {
                             "type": "string",
-                            "maxLength": 1024
+                            "maxLength": 1024,
+                            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                           },
                           "type": {
                             "type": "string",
@@ -5992,6 +7042,11 @@
                           "type": "integer",
                           "minimum": 1,
                           "maximum": 60000
+                        },
+                        "step": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65536
                         }
                       },
                       "required": [
@@ -6001,7 +7056,8 @@
                     },
                     "note": {
                       "type": "string",
-                      "maxLength": 1024
+                      "maxLength": 1024,
+                      "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
                     }
                   },
                   "required": [
@@ -6019,6 +7075,27 @@
                 "fields"
               ],
               "additionalProperties": false
+            }
+          },
+          "enums": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][A-Za-z0-9]*$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
             }
           },
           "constants": {
@@ -6065,6 +7142,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 1024,
+            "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}]*$"
           }
         },
         "additionalProperties": false

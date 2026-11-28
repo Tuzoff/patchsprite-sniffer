@@ -42,7 +42,7 @@
                 "at",
                 "option"
               ],
-              "additionalProperties": false
+              "additionalProperties": {}
             }
           },
           "entries": {
@@ -65,6 +65,7 @@
                 "trust": {
                   "type": "string",
                   "enum": [
+                    "blocked",
                     "unsupported",
                     "suspect",
                     "shape-ok",
@@ -86,7 +87,32 @@
                 "at",
                 "trust"
               ],
-              "additionalProperties": false
+              "additionalProperties": {}
+            }
+          },
+          "unverifiable": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "fp": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "at": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "fp",
+                "at"
+              ],
+              "additionalProperties": {}
             }
           }
         },
@@ -94,7 +120,7 @@
           "pins",
           "entries"
         ],
-        "additionalProperties": false
+        "additionalProperties": {}
       }
     }
   },
@@ -102,7 +128,7 @@
     "schema",
     "firmwares"
   ],
-  "additionalProperties": false,
+  "additionalProperties": {},
   "$id": "https://github.com/patchsprite-app/patchsprite-sniffer/schemas/map-check-state.v2.schema.json",
   "title": "Patchsprite map-check state",
   "description": "The marks one device's map entries hold, per firmware the unit reported. packages/engine/src/map-check-record.ts."

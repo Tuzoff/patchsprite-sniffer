@@ -20,7 +20,7 @@
 import { compressLiteral, decompress } from "./lzo.ts";
 import { joinNibbles, splitNibbles } from "./nibbles.ts";
 import { ByteJoiner } from "./record-pieces.ts";
-import { cmdLengths, hexOf, parseHex, ProtocolError, type AddressTransport, type PlainTransport, type NibbleTransport as TransportDef, type Transport, type XorTransport } from "./protocol-schema.ts";
+import { addressBytes, addressValue, cmdLengths, hexOf, parseHex, ProtocolError, type AddressTransport, type PlainTransport, type NibbleTransport as TransportDef, type Transport, type XorTransport } from "./protocol-schema.ts";
 import { SafetyError } from "./safety.ts";
 
 export type FrameDirection = "request" | "send" | "reply" | "notify";
@@ -349,7 +349,7 @@ export interface MessageFramer {
    * Where the framing addresses its data (roland-address): joins the answer to a read of `size` bytes sent in pieces at
    * successive addresses, the first at `cmd` (the answer's own cmd).
    */
-  reassembler?(cmd: Uint8Array, size: number): PieceReassembler;
+  reassembler?(cmd: Uint8Array, size: number, step?: number): PieceReassembler;
   /** Where the framing addresses its data: the message split as the map's `maxData` says, each piece at its address. */
   framePieces?(m: OutgoingMessage): Uint8Array[];
 }
@@ -377,7 +377,7 @@ export interface MessageFramerOptions {
 }
 
 /** The SysEx device ID that addresses every unit (the "all call"): a framing fact, never one unit's own ID. */
-const BROADCAST_ID = 0x7f;
+export const BROADCAST_ID = 0x7f;
 
 /** The framing engine for a transport whose messages each fit one SysEx message, or a refusal naming the framing. */
 export function messageFramer(def: Transport, opts: MessageFramerOptions = {}): MessageFramer {
@@ -397,7 +397,7 @@ export function messageFramer(def: Transport, opts: MessageFramerOptions = {}): 
       const framer: MessageFramer = {
         frame: (m, o) => x.encode(m.cmd, m.payload, o?.checksum ?? true),
         decode: (f) => x.decode(f),
-        reassembler: (cmd, size) => x.reassembler(cmd, size),
+        reassembler: (cmd, size, step) => x.reassembler(cmd, size, step),
         framePieces: (m) => x.encodePieces(m.cmd, m.payload),
       };
       if (at === undefined) return framer;
@@ -504,24 +504,6 @@ export class PlainFramer {
 }
 
 // ---- address-based SysEx -----------------------------------------------------------------------------------------
-
-/** An address (7-bit digits, most significant first) as a number; throws on a digit with the high bit set. */
-export function addressValue(address: ArrayLike<number>): number {
-  let n = 0;
-  for (let i = 0; i < address.length; i++) {
-    if (address[i] > 0x7f) throw new ProtocolError(`address byte ${address[i]} is not 7-bit`);
-    n = n * 128 + address[i];
-  }
-  return n;
-}
-
-/** A number as an address of `width` 7-bit digits, most significant first; throws when it does not fit. */
-export function addressBytes(n: number, width: number): Uint8Array {
-  if (!Number.isSafeInteger(n) || n < 0 || n >= 128 ** width) throw new ProtocolError(`address ${n} does not fit ${width} 7-bit bytes`);
-  const out = new Uint8Array(width);
-  for (let i = width - 1; i >= 0; i--, n = Math.floor(n / 128)) out[i] = n % 128;
-  return out;
-}
 
 /** Frames for a "roland-address" transport: header | cmd (command, address) | payload | checksum | f7. */
 export class AddressFramer {
@@ -654,9 +636,12 @@ export class AddressFramer {
     return { cmd: hexOf(f.subarray(cmdAt, cmdAt + n)), raw: payload, data: payload };
   }
 
-  /** Joins the pieces of the answer to a read of `size` bytes from the address in `cmd` (the answer's own cmd). */
-  reassembler(cmd: Uint8Array, size: number): AddressReassembler {
-    return new AddressReassembler(this, cmd, size);
+  /**
+   * Joins the pieces of the answer to a read of `size` bytes from the address in `cmd` (the answer's own cmd); with a
+   * `step` (the map's `pieces.step`), each that many bytes but the last.
+   */
+  reassembler(cmd: Uint8Array, size: number, step?: number): AddressReassembler {
+    return new AddressReassembler(this, cmd, size, step);
   }
 }
 
@@ -665,16 +650,22 @@ export class AddressFramer {
  * byte of the size is filled. It is the shared joiner (ByteJoiner) with each piece's offset its address less the
  * read's: pieces may come in any order, a piece sent again must carry the same bytes, and one that runs past the size is
  * refused. A message with another command, or at an address outside the read, is not part of it and is left alone (the
- * unit may report a change meanwhile); a dropped piece leaves the read unanswered, for the caller's timeout.
+ * unit may report a change meanwhile); a dropped piece leaves the read unanswered, for the caller's timeout. With a
+ * `step` (the size the unit splits an answer into, the map's `pieces.step`), only a message where that split puts a
+ * piece, and not shorter than that piece, is one: a report the unit sends of its own inside the read's range (a knob
+ * turned meanwhile) is left alone too, unless it happens to start where a piece would and be as long. A longer or empty
+ * one is taken, so the caller refuses it (over the map's maxPiece, or empty) rather than wait for the deadline.
  */
 export class AddressReassembler {
   private readonly framer: AddressFramer;
   private readonly command: string;
   private readonly start: number;
   private readonly joiner: ByteJoiner;
+  private readonly step: number | undefined;
 
-  constructor(framer: AddressFramer, cmd: Uint8Array, size: number) {
+  constructor(framer: AddressFramer, cmd: Uint8Array, size: number, step?: number) {
     this.joiner = new ByteJoiner(size);
+    this.step = step;
     this.framer = framer;
     this.start = framer.address(cmd);
     this.command = hexOf(cmd.subarray(0, framer.addressAt));
@@ -700,7 +691,12 @@ export class AddressReassembler {
       const cmd = parseHex(m.cmd);
       if (hexOf(cmd.subarray(0, this.framer.addressAt)) !== this.command) return undefined;
       const at = this.framer.address(cmd) - this.start;
-      return at >= 0 && at < this.size ? at : undefined;
+      if (at < 0 || at >= this.size) return undefined;
+      // where the unit's split puts a piece, and not shorter than that piece (the last runs to the end of the read): a
+      // longer or empty one is still the answer's, for the caller to refuse
+      const s = this.step;
+      const n = (m.data ?? m.raw).length;
+      return s === undefined || (at % s === 0 && (n === 0 || n >= Math.min(s, this.size - at))) ? at : undefined;
     } catch {
       return undefined;
     }

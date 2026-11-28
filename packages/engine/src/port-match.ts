@@ -13,6 +13,14 @@ export function bareMidiPortName(portName: string): string {
   return portName.replace(/^\d+- /, "").replace(/ \d+$/, "");
 }
 
+/**
+ * The output port name that pairs with a unit's input port: its bare name ("USB MIDI 1" pairs with "USB MIDI 2"), with
+ * Windows' numbered second pairs named apart by direction ("MIDIIN2 (X)" pairs with "MIDIOUT2 (X)").
+ */
+export function pairedOutputName(inputName: string): string {
+  return bareMidiPortName(inputName).replace(/^MIDIIN(\d+) \(/, "MIDIOUT$1 (");
+}
+
 /** How a port's name holds `want`: 2 is the name itself (instance numbers aside), 1 holds it as a whole name, 0 not at all. */
 export function midiPortMatch(portName: string, want: string): 0 | 1 | 2 {
   if (!want) return 0;

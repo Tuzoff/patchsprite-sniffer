@@ -12,6 +12,9 @@
  *   sees it, but nothing yet proves what the values mean: `shape-ok`;
  * - player-confirms: the player says a write the unit cannot read back did what was asked ("did the unit switch to
  *   preset 12?"): `player-confirmed`, weaker than a read-back;
+ * - unverifiable: a write went out that this unit cannot confirm (no value in its answer and no read-back: "sent, not
+ *   confirmed"). It changes no level: the entry is flagged `unverifiable` (EntryTrust) until the unit confirms it,
+ *   so only the player's word (player-confirms) can confirm it, and a seed patch can carry it as evidence;
  * - settles: the unit told apart the ways a map choice lists (its `observed.option` is the one that fits);
  * - contradicts: the unit did something else, or nothing (a request it never answers), and the entry turns suspect
  *   (after `strikes` in a row, default 1);
@@ -23,6 +26,11 @@
  * - skipped: an entry that was to be checked but nothing was sent (a probe's cap, a blocked message); logged only;
  * - retried: not the unit's word but the player's: a suspect entry is to be tried again, so it is no longer suspect
  *   and the unit checks it afresh (it turns suspect again after `strikes` more contradictions);
+ * - froze: the unit stopped answering right after this entry went out, and a second request went unanswered too while
+ *   it was still on USB (or, on a unit that answers nothing, the player said it stopped responding right after): the
+ *   entry is `blocked` on this firmware, and nothing sends it again until the player lifts the block. Only
+ *   `unblocked` or a repair of the map's entry lifts it; no other outcome changes a blocked entry;
+ * - unblocked: the player's word: a blocked entry may be sent again (it is blocked again if it freezes the unit again);
  * - answered-on-resend: the unit left a request unanswered, still answered a liveness probe, and answered the same
  *   request when it was sent again (a reply lost on the way): neither silence nor a plain decode. It changes no mark
  *   and adds no strike, so it never makes an entry suspect; the app counts them per entry in a session and lists an
@@ -32,6 +40,7 @@ export const OUTCOMES = [
   "confirms",
   "decodes",
   "player-confirms",
+  "unverifiable",
   "settles",
   "contradicts",
   "reopens",
@@ -40,13 +49,16 @@ export const OUTCOMES = [
   "skipped",
   "retried",
   "answered-on-resend",
+  "froze",
+  "unblocked",
 ] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 
 /**
  * How far one unit (on one firmware) trusts a map entry, weakest first. A feature that needs several entries takes the
  * weakest of them (`weakest`), so one failed entry switches off one feature, not the device.
- * - blocked: the map blocks the entry's message on this firmware; nothing is sent;
+ * - blocked: the map blocks the entry's message on this firmware, or the entry froze this unit on it; nothing
+ *   is sent;
  * - unsupported: this version of the app cannot do it (see the outcome);
  * - suspect: the unit contradicted it; writes are refused until it is settled, repaired or retried;
  * - unchecked: no evidence from this unit yet;
@@ -64,16 +76,21 @@ export function weakest(levels: Iterable<TrustLevel>): TrustLevel {
   return TRUST_LEVELS[out];
 }
 
-/** An entry's trust on one unit, and for blocked, unsupported and suspect, why. */
+/**
+ * An entry's trust on one unit, and for blocked, unsupported and suspect, why. `unverifiable`: a write to it went out
+ * that the unit could not confirm (the `unverifiable` outcome), whatever the level (the player may have confirmed it).
+ */
 export interface EntryTrust {
   level: TrustLevel;
   why?: string;
+  unverifiable?: true;
 }
 
 export interface Observation {
   /**
    * The map entry: a message ("getPreset"), a message on one block ("setBypass/amp1"), a block parameter
-   * ("param/amp1/12") or a choice ("choice/presetOrder").
+   * ("param/amp1/12"), a choice ("choice/presetOrder"), a channel-message control ("control/gain") or a preset select
+   * by channel messages ("presets/11", the index as the map counts it).
    */
   entry: string;
   outcome: Outcome;
@@ -83,7 +100,10 @@ export interface Observation {
   claimed?: unknown;
   /** what the unit did */
   observed?: unknown;
-  /** for a contradiction, an unsupported entry or a skipped one: why, in the player's words ("the unit reports scene 2") */
+  /**
+   * for a contradiction, an unsupported entry or a skipped one: why, in the player's words ("the unit reports scene
+   * 2"); for a freeze, what was sent ("setBypass for amp")
+   */
   why?: string;
   /** contradictions in a row in one session, with no confirmation between, before the entry turns suspect (default 1) */
   strikes?: number;
@@ -102,3 +122,5 @@ export interface UnitChecks {
 
 export const choiceEntry = (choice: string): string => `choice/${choice}`;
 export const paramEntry = (block: string, id: number): string => `param/${block}/${id}`;
+export const controlEntry = (name: string): string => `control/${name}`;
+export const presetEntry = (index: number): string => `presets/${index}`;

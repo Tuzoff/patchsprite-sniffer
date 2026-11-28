@@ -7,36 +7,49 @@
 import { z } from "zod";
 import { OUTCOMES, type TrustLevel } from "./map-checks.ts";
 
-/** The levels a mark can hold: `blocked` comes from the map and `unchecked` is no mark. */
-export const MARKED_LEVELS = ["unsupported", "suspect", "shape-ok", "player-confirmed", "verified"] as const satisfies readonly TrustLevel[];
+/** The levels a mark can hold: `blocked` by a freeze (the map's own blocks are no mark), and `unchecked` is none. */
+export const MARKED_LEVELS = ["blocked", "unsupported", "suspect", "shape-ok", "player-confirmed", "verified"] as const satisfies readonly TrustLevel[];
 
 const fp = z.string().max(64);
 const at = z.string().max(64);
-const entry = z.string().max(256);
 const firmware = z.string().max(64);
+/** The longest pin (choice) and entry keys a state file holds. */
+export const PIN_KEY_MAX = 128;
+export const ENTRY_KEY_MAX = 256;
+const entry = z.string().max(ENTRY_KEY_MAX);
+
+// Loose objects: a key a later build adds (a new record beside pins and entries, a new field on a mark) is kept and
+// written back as it was, so a state file passes through an older build without losing what it holds.
 
 /** When an entry or pin reached its mark, and the fingerprint of the claim it is about. */
-export const MarkSchema = z.strictObject({ fp, at });
+export const MarkSchema = z.looseObject({ fp, at });
 
 /** One entry's mark on one firmware. */
 export const EntryMarkSchema = MarkSchema.extend({
   trust: z.enum(MARKED_LEVELS),
-  /** for suspect and unsupported: why */
+  /** for suspect and unsupported: why; for blocked: what froze the unit */
   why: z.string().max(1024).optional(),
   /** for unsupported: the build of the app that could not run it */
   app: z.string().max(64).optional(),
 });
 export type EntryMark = z.infer<typeof EntryMarkSchema>;
 
+/** A settled choice's mark: the option the unit showed. */
+export const PinMarkSchema = MarkSchema.extend({ option: z.string().max(64) });
 /** The choices a unit has settled: choice name -> the option it showed. */
-export const PinsSchema = z.record(z.string().max(128), MarkSchema.extend({ option: z.string().max(64) }));
+export const PinsSchema = z.record(z.string().max(PIN_KEY_MAX), PinMarkSchema);
 
-export const FirmwareChecksSchema = z.strictObject({ pins: PinsSchema, entries: z.record(entry, EntryMarkSchema) });
+export const FirmwareChecksSchema = z.looseObject({
+  pins: PinsSchema,
+  entries: z.record(entry, EntryMarkSchema),
+  /** writes this unit could not confirm (sent, not confirmed: the `unverifiable` outcome), by entry */
+  unverifiable: z.record(entry, MarkSchema).optional(),
+});
 export type FirmwareChecks = z.infer<typeof FirmwareChecksSchema>;
 
 /** The state file: one device's marks, per firmware the unit reported. */
 export const MAP_CHECK_STATE_VERSION = 2;
-export const MapCheckStateSchema = z.strictObject({ schema: z.literal(MAP_CHECK_STATE_VERSION), firmwares: z.record(firmware, FirmwareChecksSchema) });
+export const MapCheckStateSchema = z.looseObject({ schema: z.literal(MAP_CHECK_STATE_VERSION), firmwares: z.record(firmware, FirmwareChecksSchema) });
 export type MapCheckState = z.infer<typeof MapCheckStateSchema>;
 
 /** One log line: a check as it happened (an Observation, with where and when). */

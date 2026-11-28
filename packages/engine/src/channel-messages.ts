@@ -7,6 +7,7 @@
 // which imports it: an unknown name is a SafetyError (a refusal), as is a value the map does not allow.
 
 import { z } from "zod";
+import { line, text } from "./map-text.ts";
 import { SafetyError } from "./safety.ts";
 
 /** Controls in one map. */
@@ -33,14 +34,16 @@ const DATA_MSB = 6;
 const DATA_LSB = 38;
 const NRPN_LSB = 98;
 const NRPN_MSB = 99;
+const RPN_LSB = 100;
+const RPN_MSB = 101;
 /** The controllers NRPN writes use: a plain CC on one of them would garble the next NRPN write. */
-const NRPN_CCS = [DATA_MSB, DATA_LSB, 96, 97, NRPN_LSB, NRPN_MSB, 100, 101];
+const NRPN_CCS = [DATA_MSB, DATA_LSB, 96, 97, NRPN_LSB, NRPN_MSB, RPN_LSB, RPN_MSB];
 /** 120-127 are channel mode messages (all sound off, reset controllers, local control, omni, mono, poly): never sent. */
 const LAST_PLAIN_CC = 119;
 
 const valueRule = {
   /** How the player names it ("Scene", "Footswitch A"). Default: the control's name. */
-  label: z.string().min(1).max(64).optional(),
+  label: line().min(1).max(64).optional(),
   /** What kind of control it is ("scene", "stomp", "tuner"), for listing them together. */
   group: name.optional(),
   /** The range sent; default the whole range the message carries (0-127, or 0-16383 for a 14-bit NRPN). */
@@ -55,7 +58,7 @@ const valueRule = {
   /** send: the host sends it (default); notify: the unit sends it unasked; both. */
   dir: z.enum(["send", "notify", "both"]).optional(),
   /** Free text: where the fact comes from. */
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
 };
 
 const CcControl = z.strictObject({ type: z.literal("cc"), cc: z.number().int().min(0).max(LAST_PLAIN_CC), ...valueRule });
@@ -74,7 +77,7 @@ const PresetsSchema = z.strictObject({
   perBank: z.number().int().min(1).max(128).optional(),
   /** How long the unit takes to load a preset: nothing else is sent to it for this long after the program change. */
   settleMs: z.number().int().min(0).max(10_000).optional(),
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
 });
 
 export const ControlsSchema = z.strictObject({
@@ -85,7 +88,7 @@ export const ControlsSchema = z.strictObject({
     /** The unit can listen on every channel. */
     omni: z.boolean().optional(),
     /** Where the player finds the setting on the unit ("Settings > MIDI > MIDI Channel"). */
-    where: z.string().min(1).max(256).optional(),
+    where: line().min(1).max(256).optional(),
   }),
   items: z.preprocess((v, ctx) => {
     if (v !== null && typeof v === "object" && Object.keys(v).length > MAX_CONTROLS) {
@@ -289,11 +292,8 @@ export class ChannelCodec {
       return null;
     }
     if (status === PC && p) {
-      const b = this.heardBank.get(ch) ?? { msb: 0, lsb: 0 };
-      const bank = p.bank === "msb" ? b.msb : p.bank === "lsb" ? b.lsb : p.bank === "msb-lsb" ? (b.msb << 7) | b.lsb : 0;
-      const per = p.perBank ?? 128;
-      const value = bank * per + msg[1];
-      return msg[1] < per && value < p.count ? { preset: value } : null;
+      const value = presetHeard(p, this.heardBank.get(ch) ?? { msb: 0, lsb: 0 }, msg[1]);
+      return value !== undefined ? { preset: value } : null;
     }
     // NRPN reports are not read: a unit that sends them is not one the seeds name yet
     const n = status === PC ? this.reportedPc : status === CC && msg.length >= 3 ? this.reportedCc.get(msg[1]) : undefined;
@@ -302,6 +302,14 @@ export class ChannelCodec {
     const key = this.key(n, value);
     return { control: n, value, ...(key !== undefined ? { key } : {}) };
   }
+}
+
+/** The preset (0-based) a program change selects after the Bank Select heard before it, or undefined past the map's. */
+function presetHeard(p: NonNullable<Controls["presets"]>, b: { msb: number; lsb: number }, program: number): number | undefined {
+  const bank = p.bank === "msb" ? b.msb : p.bank === "lsb" ? b.lsb : p.bank === "msb-lsb" ? (b.msb << 7) | b.lsb : 0;
+  const per = p.perBank ?? 128;
+  const index = bank * per + program;
+  return program < per && index < p.count ? index : undefined;
 }
 
 /** The Bank Select controllers a preset select uses. */
@@ -322,4 +330,99 @@ function messagesFor(c: Control, raw: number, ch: number): Uint8Array[] {
   if (c.bits === 7) out.push(Uint8Array.of(CC | ch, DATA_MSB, raw));
   else out.push(Uint8Array.of(CC | ch, DATA_MSB, raw >> 7), Uint8Array.of(CC | ch, DATA_LSB, raw & 0x7f));
   return out;
+}
+
+/** A channel message read for a capture: its channel, and what the map calls it, or what it is when the map names
+ * nothing for it. */
+export interface ReadMessage {
+  channel: number;
+  /** the map's control, or undefined when the map has no name for it (or it selects a preset) */
+  name?: string;
+  /** set when it is a program change selecting one of controls.presets: value is that preset, 0-based */
+  preset?: true;
+  value: number;
+  /** the enum key for the value, when the control names one */
+  key?: string;
+  /** what it is in MIDI terms: "CC 22", "program change", "NRPN 3/9", "bank select" */
+  what: string;
+  /** set on an NRPN the map doesn't name when a data LSB follows its data MSB: value is now the 14-bit value, in place
+   * of the 7-bit one read on the MSB (its bit depth isn't known, so both are shown) */
+  update?: true;
+}
+
+/**
+ * Reads the channel messages of a capture (the editor walk), both ways and on any channel: each one is named by the
+ * map's controls whatever their `dir`, a program change as the preset it selects (with the bank select before it),
+ * and an NRPN once its value is complete. Parts of a larger message (bank select, NRPN address and the data MSB of a
+ * 14-bit value) read as null, as do running-status fragments and anything that is not a channel message. CC 99/98 and
+ * 6/38 are read as NRPN parts unless the map names CC 99 or 98 as a plain control, so an NRPN the map doesn't name yet
+ * shows up as one: on its data MSB, and again (`update`) if a data LSB follows, since its bit depth isn't known.
+ */
+export class ChannelReader {
+  private readonly controls: Controls;
+  private readonly codec: ChannelCodec;
+  private readonly byCc = new Map<number, string>();
+  private readonly byNrpn = new Map<string, string>();
+  private readonly pc: string | undefined;
+  /** whether CC 99/98/6/38 are read as NRPN parts (see the class) */
+  private readonly nrpnParts: boolean;
+  /** per channel: the bank select and NRPN address heard last, and a 14-bit NRPN's data MSB */
+  private readonly state = new Map<number, { msb: number; lsb: number; nrpn?: [number, number]; dataMsb?: number }>();
+
+  constructor(controls: Controls, enums: Record<string, Record<string, number>> = {}) {
+    this.controls = controls;
+    this.codec = new ChannelCodec(controls, enums);
+    for (const [n, c] of Object.entries(controls.items)) {
+      if (c.type === "cc" && !this.byCc.has(c.cc)) this.byCc.set(c.cc, n);
+      if (c.type === "nrpn") this.byNrpn.set(`${c.msb}/${c.lsb}`, n);
+      if (c.type === "pc") this.pc ??= n;
+    }
+    this.nrpnParts = this.byNrpn.size > 0 || !(this.byCc.has(NRPN_MSB) || this.byCc.has(NRPN_LSB));
+  }
+
+  read(msg: Uint8Array): ReadMessage | null {
+    const status = msg[0] & 0xf0;
+    if (msg.length < 2 || (status !== CC && status !== PC) || msg[1] > 0x7f || (status === CC && (msg.length < 3 || msg[2] > 0x7f))) return null;
+    const channel = (msg[0] & 0x0f) + 1;
+    const s = this.state.get(channel) ?? { msb: 0, lsb: 0 };
+    this.state.set(channel, s);
+    const named = (name: string | undefined, value: number, what: string): ReadMessage => {
+      const key = name !== undefined ? this.codec.key(name, value) : undefined;
+      return { channel, ...(name !== undefined ? { name } : {}), value, ...(key !== undefined ? { key } : {}), what };
+    };
+    if (status === PC) {
+      const p = this.controls.presets;
+      if (!p) return named(this.pc, msg[1], "program change");
+      const index = presetHeard(p, s, msg[1]);
+      return index !== undefined ? { channel, preset: true, value: index, what: "program change" } : named(undefined, msg[1], "program change");
+    }
+    const [cc, v] = [msg[1], msg[2]];
+    if (bankSelectCcs(this.controls.presets).includes(cc)) {
+      if (cc === BANK_MSB) s.msb = v;
+      else s.lsb = v;
+      return null;
+    }
+    // an RPN address (CC 101/100) ends the NRPN one: the data entry after it is the RPN's, read as a plain CC
+    if (this.nrpnParts && (cc === RPN_MSB || cc === RPN_LSB)) s.nrpn = s.dataMsb = undefined;
+    if (this.nrpnParts && (cc === NRPN_MSB || cc === NRPN_LSB)) {
+      s.nrpn = cc === NRPN_MSB ? [v, s.nrpn?.[1] ?? 0] : [s.nrpn?.[0] ?? 0, v];
+      s.dataMsb = undefined;
+      return null;
+    }
+    if (this.nrpnParts && s.nrpn && (cc === DATA_MSB || cc === DATA_LSB)) {
+      const addr = s.nrpn.join("/");
+      const name = this.byNrpn.get(addr);
+      const c = name !== undefined ? this.controls.items[name] : undefined;
+      if (cc === DATA_MSB) {
+        // a named 14-bit NRPN ends on its LSB; an unnamed one is shown now as 7-bit, and again if an LSB follows
+        const named14 = c?.type === "nrpn" && c.bits === 14;
+        s.dataMsb = named14 || !c ? v : undefined;
+        if (named14) return null;
+        return named(name, v, `NRPN ${addr}`);
+      }
+      const r = named(name, ((s.dataMsb ?? 0) << 7) | v, `NRPN ${addr}`);
+      return !c && s.dataMsb !== undefined ? { ...r, update: true } : r;
+    }
+    return named(this.byCc.get(cc), v, `CC ${cc}`);
+  }
 }

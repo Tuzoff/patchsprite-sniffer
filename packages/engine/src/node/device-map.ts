@@ -29,6 +29,12 @@ export function protocolPathIn(dir: string, make: string, device: string): strin
   return join(dir, make, device, "protocol.json");
 }
 
+/** A draft protocol no real unit has confirmed yet, beside where protocol.json would be (draft-map.ts). */
+export function draftProtocolPathIn(dir: string, make: string, device: string): string {
+  checkNameParts(make, device);
+  return join(dir, make, device, "protocol.draft.json");
+}
+
 function readJson(path: string, what: string): unknown {
   let text: string;
   try {

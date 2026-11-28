@@ -8,6 +8,18 @@ import { hexOf, lastPieceAt, MAX_RECORD, ProtocolError, type Encoded, type Piece
 type Values = Record<string, unknown>;
 
 /**
+ * Two pieces gave one byte different values: a report the unit sent of its own (a knob turned) where a piece would sit
+ * and as long, or a unit sending the same piece twice with other bytes. The param-change driver asks a read in
+ * pieces (a reply's `pieces`) once more on it; elsewhere (packed records, the sniffer) it fails as any ProtocolError.
+ */
+export class PiecesDisagree extends ProtocolError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PiecesDisagree";
+  }
+}
+
+/**
  * Joins `size` bytes sent in pieces at offsets, in any order: `put` returns the joined bytes once every byte is filled.
  * A piece that repeats bytes already held must match them; a piece past the size, or more than twice the size received
  * in all (pieces sent again and again), is refused, so a device that never completes the record cannot hold it open.
@@ -44,7 +56,7 @@ export class ByteJoiner {
     for (let i = 0; i < piece.length; i++) {
       const at = offset + i;
       if (!this.filled[at]) continue;
-      if (this.bytes[at] !== piece[i]) throw new ProtocolError(`pieces disagree at byte ${at} of the record`);
+      if (this.bytes[at] !== piece[i]) throw new PiecesDisagree(`pieces disagree at byte ${at} of the record`);
     }
     // an empty piece counts as one byte, so endless empty pieces are refused too
     const received = this.received + Math.max(piece.length, 1);

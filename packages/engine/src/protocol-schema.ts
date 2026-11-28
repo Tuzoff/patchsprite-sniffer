@@ -8,13 +8,17 @@
 // enumerating elements, and lookups by name never reach inherited object properties.
 
 import { z } from "zod";
+import { compareVersions, firmwareEntryKey, rangesOverlap, versionParts, VERSION_PATTERN } from "./firmware-versions.ts";
 import { ControlsSchema, controlsIssues } from "./channel-messages.ts";
 import type { KnownCmd } from "./framing.ts";
 import { cmdsOverlap, MAX_CMD_TOKENS, tokensBegin } from "./cmd-overlap.ts";
+import { IdentitySchema } from "./identity.ts";
+import { line, text } from "./map-text.ts";
 import { choiceEntry, type UnitChecks } from "./map-checks.ts";
 import { crc32, pack8to7, packedLength, septets32, type TopBits, unpack7to8, unpackedLength } from "./pack7.ts";
 import { joinNibbles, type NibbleOrder, splitNibbles } from "./nibbles.ts";
 import { MEASURED_FIELDS } from "./measured-fields.ts";
+import { groupsInMode, inMode, MODE_KINDS, modeEnum, modeNames, modeReadField, modeUse, standIns, type ModeKind, type ModeUse } from "./modes.ts";
 import { SafetyError } from "./safety.ts";
 
 // ---- codec use ------------------------------------------------------------------------------------------------
@@ -48,6 +52,8 @@ function noteCodecUse(protocol: Protocol, use: "encode" | "decode", message: str
 const MAX_BYTES = 1 << 20;
 /** Problems reported before validation stops listing more. */
 const MAX_ISSUES = 100;
+/** The most block separations a report lists (blockSeparations). */
+const MAX_SEPARATIONS = 1000;
 /** Elements in one layout, all fields together. */
 const MAX_ELEMENTS = 1 << 16;
 /** Bytes in one string field. */
@@ -87,6 +93,15 @@ const MAX_CONNECT_PAUSE_MS = 30_000;
 /** Bytes in one record joined from pieces (`pieces`). */
 export const MAX_RECORD = 1 << 16;
 
+/** Address bytes at most: wider than any address-based unit uses, and still exact as a number (7 x 7 bits). */
+const MAX_ADDRESS_BYTES = 7;
+/** Address tables in a map. */
+const MAX_ADDRESS_TABLES = 64;
+/** Steps the address search may take for one question before it gives up (a load check then refuses the map). */
+const MAX_ADDRESS_STEPS = 20_000;
+/** Addresses one message may reach for the lookalike check to walk them all; past it the pair counts as meeting. */
+const MAX_LOOKALIKE_ADDRESSES = 4096;
+
 /** A record refused before its entries are parsed when it has too many keys. */
 function cappedRecord<K extends z.ZodType<string>, V extends z.ZodType>(key: K, value: V, max: number, what: string) {
   return z.preprocess((v, ctx) => {
@@ -110,6 +125,11 @@ const size = nonNeg;
 /** Bytes as space-separated hex pairs: "f0 7d 01". */
 const HEX_BYTES = /^[0-9a-f]{2}( [0-9a-f]{2})*$/;
 const hexBytes = z.string().max(3 * MAX_STRING).regex(HEX_BYTES, "bytes are lowercase hex pairs separated by single spaces");
+/** An address or an address offset: 7-bit digits, most significant first ("00 01 00" is 128). */
+const addressHex = hexBytes
+  .refine((h) => h.split(" ").every((x) => parseInt(x, 16) < 0x80), "address digits are 7-bit")
+  .refine((h) => h.split(" ").length <= MAX_ADDRESS_BYTES, "an address has at most 7 digits");
+
 /** A command: hex pairs, or `{arg}` placeholders filled per call (one byte each). */
 const CMD_TOKEN = /^([0-9a-f]{2}|\{[a-z][A-Za-z0-9]*\})$/;
 const cmdTemplate = z
@@ -138,7 +158,7 @@ const fieldBase = {
   offset: size.optional(),
   repeat: repeat.optional(),
   /** Free text: where the fact comes from. Ignored by the codec. */
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
 };
 
 /** Sum of the payload's bytes from `from`, masked: up to this field ("self") or to the end of the payload ("end"). */
@@ -176,6 +196,12 @@ const scalarField = z.strictObject({
   saturate: z.boolean().optional(),
   /** Name of an enum: encode accepts its keys, decode returns them (numbers it does not know stay numbers). */
   enum: name.optional(),
+  /**
+   * The enum this field reads, chosen by another field of the same payload or layout (each block's effect type has a
+   * list of its own, say): `field` names that field, which reads an enum, and `enums` gives the enum for each of its
+   * keys. Where `enums` names none for the other field's value, this field reads and takes numbers. Not with `enum`.
+   */
+  enumBy: z.strictObject({ field: name, enums: cappedRecord(key, name, MAX_ENTRIES, "enumBy entries") }).optional(),
   /** The only values encode may write (safety: values known to be safe). */
   allowed: z.array(z.number()).max(MAX_ENTRIES).optional(),
   /** Computed by the codec, checked on decode; the caller passes nothing. */
@@ -206,6 +232,17 @@ const scalarField = z.strictObject({
    * The field takes the keys the choice's options set (today its endian) from the option in force.
    */
   choice: name.optional(),
+  /**
+   * roland-address only, on a field of a message's own payload: the field takes no payload bytes but moves the
+   * message's address. Its wire value times `stride` (address digits, "00 01 00" is 128) is added to the cmd's address,
+   * or, with `table`, the offset the map's `addresses` table gives the field's enum key (a block's own area, say). A reply
+   * to such a request carries the same fields: its address moves with the request's, and they read as the request's.
+   */
+  address: z
+    .strictObject({ stride: addressHex.optional(), table: name.optional() })
+    .refine((a) => (a.stride === undefined) !== (a.table === undefined), "an address field has a stride or a table, not both")
+    .refine((a) => a.stride === undefined || /[1-9a-f]/.test(a.stride), "a stride of 0 does not move the address")
+    .optional(),
 });
 
 const bytesField = z.strictObject({
@@ -256,6 +293,13 @@ export const PiecesSchema = z.strictObject({
   size: z.union([z.number().int().min(1).max(MAX_RECORD), z.strictObject({ request: name }), z.strictObject({ constant: name })]).optional(),
   maxPiece: z.number().int().min(1).max(MAX_RECORD).optional(),
   deadlineMs: z.number().int().min(1).max(MAX_LIST_MS).optional(),
+  /**
+   * By address only: the unit splits the answer every `step` bytes from the read's start, so only a message where that
+   * split puts a piece, and not shorter than that piece (the last runs to the end), is one. A change the unit reports
+   * of its own inside the read's range (a knob turned meanwhile) is then left alone rather than taken for a piece.
+   * Without it, any message of the reply's command inside the range is a piece. Set it only from a capture.
+   */
+  step: z.number().int().min(1).max(MAX_RECORD).optional(),
 });
 export type Pieces = z.infer<typeof PiecesSchema>;
 
@@ -296,7 +340,7 @@ const packedTail = z.strictObject({
    * rule's, refused here. The record layout's fields may use all 8 bits. record-pieces.ts joins and splits.
    */
   pieces: PiecesSchema.optional(),
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
 });
 export type PackedTail = z.infer<typeof packedTail>;
 
@@ -338,7 +382,7 @@ export const MeasuredDateSchema = z.iso.date();
 export const MeasuredValueSchema = z.strictObject({
   value: z.number(),
   unit: z.enum(MEASURED_UNITS),
-  measuredOn: z.string().max(256),
+  measuredOn: text().max(256),
   date: z.union([MeasuredDateSchema, z.iso.datetime({ offset: true })]),
   source: z.enum(MEASURED_SOURCES),
 });
@@ -471,9 +515,6 @@ const PlainTransportSchema = z.strictObject({
   timing: TimingSchema,
 });
 
-/** Address bytes at most: wider than any address-based unit uses, and still exact as a number (7 x 7 bits). */
-const MAX_ADDRESS_BYTES = 7;
-
 /**
  * Address-based SysEx ("roland-address"), one message per inner message:
  *   header | cmd (command byte(s), then the address) | payload | checksum | f7
@@ -493,6 +534,12 @@ const AddressTransportSchema = z.strictObject({
        * answers a broadcast with its own. Omitted: incoming messages must carry the header as it is.
        */
       deviceIdAt: z.number().int().min(1).max(15).optional(),
+      /**
+       * Where the unit's MIDI identity reply carries the same device ID as this header (`f0 7e <id> 06 02`, as the
+       * vendor documents it, cited in `source`): a unit silent at the map's default ID is tried once more at the
+       * reply's ID. Left out, the reply's ID is never used. Needs `deviceIdAt` and the map's `identity`.
+       */
+      identityDeviceId: z.strictObject({ source: z.lazy(() => SourceSchema) }).optional(),
       terminator: z.literal("f7"),
       checksum: z.strictObject({
         algo: z.literal("roland-sum"),
@@ -502,7 +549,8 @@ const AddressTransportSchema = z.strictObject({
       /** The most data bytes one message carries: a longer write goes in pieces at successive addresses. */
       maxData: z.number().int().min(1).max(MAX_BYTES).optional(),
     })
-    .refine((f) => f.deviceIdAt === undefined || f.deviceIdAt < f.header.split(" ").length, "deviceIdAt is inside the header"),
+    .refine((f) => f.deviceIdAt === undefined || f.deviceIdAt < f.header.split(" ").length, "deviceIdAt is inside the header")
+    .refine((f) => f.identityDeviceId === undefined || f.deviceIdAt !== undefined, "identityDeviceId needs deviceIdAt"),
   inner: z
     .strictObject({
       cmdLength: z.number().int().min(2).max(MAX_CMD_TOKENS),
@@ -556,7 +604,7 @@ export const ENTRY_SOURCES = ["doc", "player-confirmed", "wire", "device-reporte
 export const SourceSchema = z.strictObject({
   kind: z.enum(ENTRY_SOURCES),
   /** what it was read from: a document and page, a capture or action id */
-  ref: z.string().min(1).max(512).optional(),
+  ref: text().min(1).max(512).optional(),
 });
 export type EntrySource = z.infer<typeof SourceSchema>;
 
@@ -606,6 +654,42 @@ const AckSchema = z
   })
   .refine((a) => (a.idField === undefined) === (a.requestIdField === undefined), "idField and requestIdField go together");
 
+/** A value a probe or read-back puts in a request field: a number, an enum key, or null for a field's "none". */
+const sampleValue = z.union([z.number(), z.string().max(64), z.null()]);
+
+/**
+ * First contact: the request has no side effect on the unit (some maps write with a request, so `dir` alone does not
+ * say so), and the read-only probe may send it once. `true`, or the values to send it with: `fields` for payload
+ * fields that have no const, default or copyOf, `args` for cmd placeholders.
+ */
+const SafeReadSchema = z.union([
+  z.literal(true),
+  z.strictObject({
+    fields: cappedRecord(name, sampleValue, 64, "safeRead fields").optional(),
+    args: cappedRecord(name, byte, 16, "safeRead args").optional(),
+  }),
+]);
+
+/**
+ * On a write (a send, or a request that is not a safeRead): the safeRead request that reads back what it wrote. A
+ * name alone pairs fields by name: the read's own payload fields the write also has are its inputs, and the read's
+ * reply fields the write also has (inputs aside, and only fields that carry a value in both) are compared. The long
+ * form names the pairs, each list replacing what the name alone would infer. Compared as decoded values. `false` says
+ * the unit has no read for it, so only the player can confirm it lands.
+ */
+const ReadBackSchema = z.union([
+  name,
+  /** the unit can't read the write back: only the player can confirm it (said outright where the framing never acknowledges one) */
+  z.literal(false),
+  z.strictObject({
+    request: name,
+    /** the read's request field filled from the write's field (its address: block, parameter) */
+    inputs: z.array(z.strictObject({ request: name, send: name })).max(16).optional(),
+    /** the read's reply field that must equal the write's field */
+    compare: z.array(z.strictObject({ reply: name, send: name })).min(1).max(16).optional(),
+  }),
+]);
+
 export const MessageSchema = z.strictObject({
   cmd: cmdTemplate,
   /** request: host asks; send: host writes; reply: device answers; notify: device speaks unasked. */
@@ -624,23 +708,28 @@ export const MessageSchema = z.strictObject({
    */
   poll: z.boolean().optional(),
   source: SourceSchema.optional(),
-  note: z.string().max(1024).optional(),
+  /** On a request with no side effect: the first-contact probe may send it (see SafeReadSchema). */
+  safeRead: SafeReadSchema.optional(),
+  /** On a write: the request that reads back what it wrote (see ReadBackSchema). */
+  readBack: ReadBackSchema.optional(),
+  note: text().max(1024).optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;
+export type SafeRead = z.infer<typeof SafeReadSchema>;
 type Reply = z.infer<typeof ReplySchema>;
 
 // ---- settings (device-wide globals and EQ) -----------------------------------------------------------------------
 
 const SettingSchema = z.strictObject({
   id: key,
-  label: z.string().max(256),
+  label: line().max(256),
   group: name,
   /** Where the value sits in the group read-back. */
   read: z.strictObject({ offset: size, type: z.enum(SCALAR_TYPES) }),
   /** The message that writes it, and its cmd arguments. Its payload has a field named `value`. */
   write: z.strictObject({ message: name, args: cappedRecord(name, byte, 8, "args").optional() }),
   /** Value -> name, for the values known. How a value is shown otherwise stays in code. */
-  options: cappedRecord(z.string().regex(/^-?\d{1,10}$/), z.string().max(256), MAX_ENTRIES, "options").optional(),
+  options: cappedRecord(z.string().regex(/^-?\d{1,10}$/), line().max(256), MAX_ENTRIES, "options").optional(),
   /** Values known to be safe to write: the only ones written. */
   writable: z.array(z.number().int()).max(MAX_ENTRIES),
   /** Shown, never written. */
@@ -662,7 +751,7 @@ const EqSchema = z.strictObject({
   /** Parameter p is read at base + stride * p, written with `write` (fields `param` and `value`). */
   param: z.strictObject({ write: name, base: size, stride: size, type: z.enum(SCALAR_TYPES) }),
   bands: z
-    .array(z.strictObject({ id: key, label: z.string().max(256), on: nonNeg, freq: nonNeg, q: nonNeg, gain: nonNeg.optional() }))
+    .array(z.strictObject({ id: key, label: line().max(256), on: nonNeg, freq: nonNeg, q: nonNeg, gain: nonNeg.optional() }))
     .max(64),
   level: nonNeg,
   ranges: z.record(z.enum(["freq", "q", "gain", "level"]), z.tuple([z.number(), z.number()])),
@@ -671,13 +760,14 @@ const EqSchema = z.strictObject({
 // ---- the section -----------------------------------------------------------------------------------------------
 
 const EnumSchema = cappedRecord(key, z.number().int(), MAX_ENTRIES, "enum keys");
+const enums = cappedRecord(name, EnumSchema, MAX_ENTRIES, "enums");
 const messages = cappedRecord(name, MessageSchema, MAX_ENTRIES, "messages");
 const layouts = cappedRecord(name, LayoutSchema, MAX_ENTRIES, "layouts");
 const constants = cappedRecord(name, z.number(), MAX_ENTRIES, "constants");
 const blocked = z.array(name).max(MAX_BLOCKED);
 
 /** What a firmware changes from the base protocol: whole entries replaced by name, and messages it must not get. */
-const reason = z.string().min(1).max(512);
+const reason = text().min(1).max(512);
 
 /**
  * The safety floor: rules the driver enforces before anything is sent, whatever the caller asks. A firmware can make
@@ -699,7 +789,7 @@ const SafetySchema = z.strictObject({
    * being read out of the text. A note needs a character that prints, so it never shows as a bare "Note: ".
    */
   notes: z
-    .array(z.string().max(200).refine((s) => /[^\s\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/.test(s), "a note has text"))
+    .array(text().max(200).refine((s) => /[^\s\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/.test(s), "a note has text"))
     .max(16)
     .optional(),
 });
@@ -707,7 +797,10 @@ const SafetySchema = z.strictObject({
 /** How the device names things for the player. */
 const DisplaySchema = z.strictObject({
   /** The device's own name, as the player knows it. */
-  deviceName: z.string().min(1).max(64),
+  deviceName: line()
+    .min(1)
+    .max(64)
+    .regex(/^[\p{L}\p{N}](?:[\p{L}\p{N} .,!'&+()/_®™-]|(?<=\S):(?=\S))*$/u, "a device name is letters, digits, spaces and . , ! ' & + ( ) / _ - ® ™, and : only between two non-spaces"),
   /**
    * Patch labels: `{bank}`, `{slot}` and `{index}` stand for numbers, `{index:3}` zero-padded to 3 digits. A patch's
    * index i is in bank floor(i / bankSize) + firstBank, at slot i % bankSize + firstSlot, and is number i + firstIndex.
@@ -722,11 +815,11 @@ const DisplaySchema = z.strictObject({
   /** Rows the blocks are laid out in on the device's screen. Needed on a patch-dump device. */
   rows: z.number().int().min(1).max(16).optional(),
   /** The name a free patch slot has. Needed on a patch-dump device. */
-  emptyPatchName: z.string().min(1).max(64).optional(),
+  emptyPatchName: line().min(1).max(64).optional(),
   /** A scene's name before anyone names it; `{n}` is its number from 1. Needed on a device with scenes. */
-  defaultSceneName: z.string().min(1).max(64).optional(),
+  defaultSceneName: line().min(1).max(64).optional(),
   /** How the player is told which scene: `{n}` is its number from 1 ("Scene {n}"). Needed on a device with scenes. */
-  sceneLabel: z.string().min(1).max(64).regex(/\{n\}/, "a {n} for the scene's number").optional(),
+  sceneLabel: line().min(1).max(64).regex(/\{n\}/, "a {n} for the scene's number").optional(),
   /** What the device calls a block's channels, one character each in order ("ABCD", "XY"). Default: A, B, C, ... */
   channelNames: z
     .string()
@@ -748,7 +841,7 @@ const AudioSchema = z.strictObject({
     /** the quietest volume that is not muted */
     quietest: z.number().int(),
     calibrated: z.boolean(),
-    calibratedOn: z.string().max(256).optional(),
+    calibratedOn: text().max(256).optional(),
     /** how far the measurements sit from the law, dB */
     toleranceDb: z.number().nonnegative().optional(),
     evidence: z.array(z.strictObject({ volume: z.number(), lufs: z.number() })).max(64).optional(),
@@ -773,7 +866,7 @@ const AudioSchema = z.strictObject({
     /** the inputSource keys for a reamp and for live playing, with what the player calls them */
     source: key,
     liveSource: key,
-    sourceNames: z.record(key, z.string().min(1).max(64)),
+    sourceNames: z.record(key, line().min(1).max(64)),
     /** what one reamp takes on top of its audio (opening the endpoints, pre-roll, tail, the input switch), measured
      * on the device, in s: a reamp of s seconds takes about s + value */
     overhead: measuredFieldSchema("audio.reamp.overhead").optional(),
@@ -803,14 +896,25 @@ const HostSchema = z.strictObject({
   /** USB vendor and product ids, 4 hex digits each */
   usb: z.strictObject({ vid: z.string().regex(/^[0-9A-F]{4}$/), pid: z.string().regex(/^[0-9A-F]{4}$/) }),
   /** the vendor's own apps that hold the port: process name prefix (lower case) and what to call it */
-  vendorApps: z.array(z.tuple([z.string().min(1).max(64), z.string().min(1).max(64)])).max(16),
+  vendorApps: z.array(z.tuple([line().min(1).max(64), line().min(1).max(64)])).max(16),
   /** the vendor's editor, for the editor-walk tools */
   editor: EditorSchema.optional(),
 });
 
+const version = z.string().regex(VERSION_PATTERN, "a version is dotted whole numbers, maybe after a V, such as 4.00, 21 or V1.2.0");
 const FirmwareDeltaSchema = z.strictObject({
+  /**
+   * The versions this entry covers besides its own key: from `from` (included) up to `below` (left out), either end
+   * open. A version the unit reports reads the entry keyed by exactly it first, else the one entry whose range holds it.
+   */
+  range: z
+    .strictObject({ from: version.optional(), below: version.optional() })
+    .refine((r) => r.from !== undefined || r.below !== undefined, "a range needs from, below or both")
+    .optional(),
   messages: messages.optional(),
   layouts: layouts.optional(),
+  /** whole enums replaced by name (a firmware that adds models lists them all), or new ones its own messages name */
+  enums: enums.optional(),
   constants: constants.optional(),
   blocked: blocked.optional(),
   /** stricter safety on this firmware: fewer scenes for model changes, more halting model types */
@@ -820,6 +924,7 @@ const FirmwareDeltaSchema = z.strictObject({
       haltingTypes: z.array(z.number().int().min(0)).max(256).optional(),
     })
     .optional(),
+  note: text().max(1024).optional(),
 });
 
 /** One block parameter, by the name the device shows. */
@@ -830,14 +935,14 @@ const ParameterSchema = z.strictObject({
    * range: a plain number min..max in steps of `step`.
    */
   kind: z.enum(["knob", "slider", "select", "switch", "range"]),
-  options: cappedRecord(z.string().regex(/^\d{1,5}$/), z.string().min(1).max(64), 1024, "options").optional(),
+  options: cappedRecord(z.string().regex(/^\d{1,5}$/), line().min(1).max(64), 1024, "options").optional(),
   min: z.number().int().optional(),
   max: z.number().int().optional(),
   step: z.number().int().min(1).optional(),
   /** The raw value the device gives the parameter when the effect is put in (an option's key for a select or switch). */
   default: z.number().int().optional(),
   source: SourceSchema.optional(),
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
 });
 
 /** Parameters and options across every group, counted before the groups are parsed. */
@@ -856,6 +961,39 @@ function parameterTotals(v: unknown): { params: number; options: number } {
 }
 
 /**
+ * A rule a linked set's values must keep, over the set's parameters in its order or over `params`, a run of them:
+ * - ascending: each at or below the next (a min and max pair; `strict`: below it);
+ * - distinct: no value twice, except the `repeatable` ones (an order of effects, where a split may repeat).
+ */
+const LinkRuleSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("ascending"), params: z.array(line().min(1).max(64)).min(2).max(256).optional(), strict: z.boolean().optional() }),
+  z.strictObject({
+    kind: z.literal("distinct"),
+    params: z.array(line().min(1).max(64)).min(2).max(256).optional(),
+    repeatable: z.array(z.number().int()).max(64).optional(),
+  }),
+]);
+
+/**
+ * Parameters the device checks together: a write that would break a rule is refused before anything is sent, and
+ * the driver writes the set in an order that never leaves it in a state the rules forbid.
+ * - commit "last": the device holds each write pending until the set's last parameter is written, then applies them
+ *   all if they keep its rules. Every parameter of the set is written, in the
+ *   set's order, ending with the last one.
+ * - commit "each": the device applies each write at once. Only the parameters that change are written, in an order
+ *   that keeps the rules after every write; a change no such order reaches (a swap within a distinct set) is refused.
+ */
+const LinkedSetSchema = z.strictObject({
+  /** names of the table's parameters, in the order the device takes them (the last commits a "last" set) */
+  params: z.array(line().min(1).max(64)).min(2).max(256),
+  commit: z.enum(["last", "each"]),
+  rules: z.array(LinkRuleSchema).max(16).optional(),
+  note: text().max(1024).optional(),
+});
+export type LinkedSetDef = z.infer<typeof LinkedSetSchema>;
+export type LinkRule = z.infer<typeof LinkRuleSchema>;
+
+/**
  * Block parameters, for devices that set them one by one: groups of blocks (all amps, all delays) that share one
  * parameter table, or, on a device whose slots can each hold any effect, groups of effect types (keys of the `type`
  * enum) that share one: a slot's table is then its current type's. A parameter the device lists (paramList) but no
@@ -871,7 +1009,9 @@ const ParametersObject = z.strictObject({
       blocks: z.array(key).min(1).max(64).optional(),
       /** keys of the `type` enum: the table goes with these effect types, in whichever block (slot) holds one */
       types: z.array(key).min(1).max(1024).optional(),
-      params: cappedRecord(z.string().min(1).max(64), ParameterSchema, 1024, "params"),
+      params: cappedRecord(line().min(1).max(64), ParameterSchema, 1024, "params"),
+      /** parameters the device checks together, by a name for the set (see LinkedSetSchema) */
+      linked: cappedRecord(key, LinkedSetSchema, 64, "linked").optional(),
     }),
     256,
     "groups",
@@ -893,14 +1033,41 @@ const ParametersSchema = z.preprocess((v, ctx) => {
  */
 const ChoiceSchema = z.strictObject({
   /** what is in doubt, for the player: "how this unit numbers presets" */
-  what: z.string().min(1).max(128),
+  what: line().min(1).max(128),
   /** a request whose reply settles it, which the driver may read before refusing a send: a read, never a change */
   readBy: name.optional(),
   /** what the player can do to settle it: "switch to any preset on the unit itself, then ask again" */
-  settle: z.string().min(1).max(256).optional(),
+  settle: text().min(1).max(256).optional(),
   options: cappedRecord(name, z.strictObject({ endian }), MAX_CHOICE_OPTIONS, "options"),
   source: SourceSchema.optional(),
-  note: z.string().max(1024).optional(),
+  note: text().max(1024).optional(),
+});
+
+/** Modes a map may name, and stand-ins one mode may list per kind. */
+const MAX_MODES = 16;
+const standInsOf = (k: z.ZodType<string>, what: string) => cappedRecord(k, k.nullable(), MAX_ENTRIES, what).optional();
+
+/**
+ * Modes whose entries live apart (a unit set up for guitar or for bass keeps its patches at other addresses in each).
+ * `read` names a request and the field of its reply that says which mode the unit is in, reading an enum whose keys are
+ * the modes. `use` lists, per mode, the map entries that stand in for the names the driver asks for (null where the
+ * mode has no such entry); a mode it does not list uses the map's own entries.
+ */
+const ModesSchema = z.strictObject({
+  read: z.strictObject({ message: name, field: line().min(1).max(64) }),
+  use: cappedRecord(
+    key,
+    z.strictObject({
+      messages: standInsOf(name, "message stand-ins"),
+      layouts: standInsOf(name, "layout stand-ins"),
+      enums: standInsOf(name, "enum stand-ins"),
+      constants: standInsOf(name, "constant stand-ins"),
+      groups: standInsOf(key, "group stand-ins"),
+    }),
+    MAX_MODES,
+    "modes",
+  ),
+  note: text().max(1024).optional(),
 });
 
 /**
@@ -913,7 +1080,7 @@ const ConnectStepSchema = z
     message: name.optional(),
     values: cappedRecord(name, z.union([z.number(), z.string().max(3 * MAX_STRING)]), 64, "values").optional(),
     pauseMs: z.number().int().min(0).max(MAX_STEP_PAUSE_MS).optional(),
-    note: z.string().max(1024).optional(),
+    note: text().max(1024).optional(),
   })
   .refine((s) => s.message !== undefined || s.pauseMs !== undefined, "a step sends a message, pauses, or both")
   .refine((s) => s.message !== undefined || s.values === undefined, "values go with a message");
@@ -938,17 +1105,24 @@ const ProtocolBase = z.strictObject({
   transport: TransportSchema,
   messages,
   layouts,
-  enums: cappedRecord(name, EnumSchema, MAX_ENTRIES, "enums").optional(),
+  enums: enums.optional(),
   /** Named sizes, counts and sentinels ("presetCount", "sampleFirstId"). */
   constants: constants.optional(),
   settings: SettingsSchema.optional(),
   eq: EqSchema.optional(),
   /** Messages never sent on any firmware. */
   blocked: blocked.optional(),
+  /**
+   * roland-address only: named tables of address offsets by enum key, for address fields with `table` (where each block's
+   * area starts, relative to the message's own address).
+   */
+  addresses: cappedRecord(name, cappedRecord(key, addressHex, MAX_ENTRIES, "table entries"), MAX_ADDRESS_TABLES, "address tables").optional(),
   safety: SafetySchema.optional(),
   display: DisplaySchema.optional(),
   audio: AudioSchema.optional(),
   host: HostSchema.optional(),
+  /** What the unit answers to the MIDI identity request; checked before anything else is sent to it (identity.ts). */
+  identity: IdentitySchema.optional(),
   /**
    * How the device is driven, stated by the map rather than guessed from its framing: "patch-dump" (the unit hands
    * over and takes whole patches as one record the map lays out) or "param-change" (the unit
@@ -967,13 +1141,36 @@ const ProtocolBase = z.strictObject({
     }, z.enum(DRIVERS))
     .optional(),
   parameters: ParametersSchema.optional(),
+  /**
+   * What the map's sources warn crashed a unit or hurt someone's ears (a seed's hazard list), by the entry names map
+   * checks use ("setParam", "param/amp/1", "setBypass/amp") -> why. With `values`, only writes of those raw values (an
+   * amp model's number). While no unit has verified the map on its firmware (a draft, or a confirmed map that lists no
+   * check of that firmware), those writes are refused (first-write.ts); a map listing the firmware settled them.
+   */
+  hazards: cappedRecord(
+    text().min(1).max(256),
+    z.strictObject({ why: reason, values: z.array(z.union([z.number(), z.string().max(64)])).min(1).max(256).optional() }),
+    MAX_ENTRIES,
+    "hazards",
+  ).optional(),
+  /**
+   * What the map's sources warn about that no single write names (a timing rule, a mode, how a save must be sent): told
+   * to the player while the map is a draft, never enforced. A caution code can enforce becomes data instead (a pause in
+   * `transport.timing`, a hazard on an entry). `about` lists the entries it concerns, by the same names as `hazards`.
+   */
+  cautions: z
+    .array(z.strictObject({ why: reason, about: z.array(line().min(1).max(256)).min(1).max(64).optional() }))
+    .max(256)
+    .optional(),
   /** MIDI channel messages the unit takes (CC, program change with bank select, NRPN): see channel-messages.ts. */
   controls: ControlsSchema.optional(),
   /** Encodings the docs disagree on, settled per unit (fields name them with `choice`). */
   choices: cappedRecord(name, ChoiceSchema, MAX_CHOICES, "choices").optional(),
   /** Patch slots Patchsprite may use as scratch (compare_patch parks the edits there), labels as the device spells
    * them, best first. Whatever a player keeps there is backed up before first use. */
-  scratch: z.strictObject({ slots: z.array(z.string().min(1).max(16)).min(1).max(8) }).optional(),
+  scratch: z.strictObject({ slots: z.array(line().min(1).max(16)).min(1).max(8) }).optional(),
+  /** Modes whose entries live apart, how the unit's mode is read, and which entries stand in for which in each. */
+  modes: ModesSchema.optional(),
   /** Steps the unit needs when its port opens (an edit mode, a handshake). */
   session: SessionSchema.optional(),
   /** Per-firmware changes, keyed by the version string the device reports. */
@@ -1045,34 +1242,73 @@ function tailOnlyLayouts(msgs: Record<string, Message>, lays: Record<string, Lay
  */
 function sevenBitIssues(p: ProtocolShape): string[] {
   const out: string[] = [];
-  const check = (where: string, l: Layout, all: Record<string, Layout>) => {
-    for (const f of l.fields) {
-      if (f.type === "bytes" || f.type === "string" || f.type === "pad" || digitsOf(f)) continue;
-      // every wire value the map names for a whole-byte u8: its max, default and enum values (scaled), const and nullAs
-      const wire = (x: number) => x * (f.scale ?? 1) + (f.bias ?? 0);
-      const enumValues = f.enum !== undefined && p.enums && Object.hasOwn(p.enums, f.enum) ? Object.values(p.enums[f.enum]) : [];
-      const named = [f.max, f.default, ...enumValues].filter((x) => x !== undefined).map(wire);
-      for (const x of [f.const, f.nullAs]) if (x !== undefined) named.push(x);
-      // a packed tail's length field is written from the data, up to its maxLength
-      if (l.packed?.lengthField === f.name) named.push(l.packed.maxLength);
-      // a record piece's offset field, up to the last piece's offset
-      const rec = tailPieces(l.packed);
-      if (rec?.offsetField === f.name && has(all, rec.layout) && l.packed!.maxLength >= 1) named.push(lastPieceAt(layoutSize(all[rec.layout]), l.packed!.maxLength));
-      const ok = f.type === "u8" && (f.bits ? f.bits.shift + f.bits.width <= 7 : named.every((x) => x <= 0x7f));
-      if (!ok) out.push(`${where}: field ${f.name} needs septets or nibbles, or 7 bits at most, on a ${p.transport.framing} transport`);
-    }
+  type Enums = Record<string, Record<string, number>>;
+  type AnyField = Layout["fields"][number];
+  // each enum's largest value, found once per table: scale is positive, so it gives the field's largest enum wire value
+  const largest = new Map<Record<string, number>, number>();
+  const largestOf = (e: Record<string, number>) => {
+    let m = largest.get(e);
+    if (m === undefined) largest.set(e, (m = Object.values(e).reduce((x, y) => Math.max(x, y), -Infinity)));
+    return m;
   };
-  const scan = (prefix: string, msgs: Record<string, Message> | undefined, lays: Record<string, Layout> | undefined, exempt: Set<string>, all: Record<string, Layout>) => {
-    for (const [n, l] of Object.entries(lays ?? {})) if (!exempt.has(n)) check(`${prefix}layout ${n}`, l, all);
+  /** The enums a field names: its own `enum`, and those its `enumBy` picks from. */
+  const enumsOf = (f: AnyField): string[] =>
+    f.type === "bytes" || f.type === "string" || f.type === "pad" ? [] : [...(f.enum !== undefined ? [f.enum] : []), ...Object.values(f.enumBy?.enums ?? {})];
+  const fits = (f: AnyField, l: Layout, all: Record<string, Layout>, enums: Enums) => {
+    // an address field's value goes in the address, which the address checks cover
+    if (f.type === "bytes" || f.type === "string" || f.type === "pad" || digitsOf(f) || f.address) return true;
+    // every wire value the map names for a whole-byte u8: its max, default and largest enum value (scaled), const and nullAs
+    const wire = (x: number) => x * (f.scale ?? 1) + (f.bias ?? 0);
+    // its own enum and every enum an enumBy can pick for it
+    const named = [f.max, f.default, ...enumsOf(f).map((e) => (has(enums, e) ? largestOf(enums[e]) : undefined))].filter((x) => x !== undefined).map(wire);
+    for (const x of [f.const, f.nullAs]) if (x !== undefined) named.push(x);
+    // a packed tail's length field is written from the data, up to its maxLength
+    if (l.packed?.lengthField === f.name) named.push(l.packed.maxLength);
+    // a record piece's offset field, up to the last piece's offset
+    const rec = tailPieces(l.packed);
+    if (rec?.offsetField === f.name && has(all, rec.layout) && l.packed!.maxLength >= 1) named.push(lastPieceAt(layoutSize(all[rec.layout]), l.packed!.maxLength));
+    return f.type === "u8" && (f.bits ? f.bits.shift + f.bits.width <= 7 : named.every((x) => x <= 0x7f));
+  };
+  const fieldIssue = (where: string, f: AnyField, l: Layout, all: Record<string, Layout>, enums: Enums) => {
+    if (!fits(f, l, all, enums)) out.push(`${where}: field ${f.name} needs septets or nibbles, or 7 bits at most, on a ${p.transport.framing} transport`);
+  };
+  const check = (where: string, l: Layout, all: Record<string, Layout>, enums: Enums) => {
+    for (const f of l.fields) fieldIssue(where, f, l, all, enums);
+  };
+  const scan = (prefix: string, msgs: Record<string, Message> | undefined, lays: Record<string, Layout> | undefined, exempt: Set<string>, all: Record<string, Layout>, enums: Enums) => {
+    for (const [n, l] of Object.entries(lays ?? {})) if (!exempt.has(n)) check(`${prefix}layout ${n}`, l, all, enums);
     for (const [n, m] of Object.entries(msgs ?? {})) {
       if (m.cmd.split(" ").some((t) => !t.startsWith("{") && parseInt(t, 16) > 0x7f)) out.push(`${prefix}message ${n}: cmd bytes are 7-bit on a ${p.transport.framing} transport`);
-      if (m.payload !== undefined && typeof m.payload !== "string") check(`${prefix}message ${n}`, m.payload, all);
+      if (m.payload !== undefined && typeof m.payload !== "string") check(`${prefix}message ${n}`, m.payload, all, enums);
     }
   };
+  const baseEnums = p.enums ?? {};
   const baseExempt = tailOnlyLayouts(p.messages, p.layouts);
-  scan("", p.messages, p.layouts, baseExempt, p.layouts);
+  scan("", p.messages, p.layouts, baseExempt, p.layouts, baseEnums);
+  // the base fields naming each enum, found once: a firmware that replaces an enum checks only those it keeps
+  let byEnum: Map<string, [kind: "layout" | "message", entry: string, f: AnyField, l: Layout][]> | undefined;
+  const fieldsNaming = (e: string) => {
+    if (!byEnum) {
+      byEnum = new Map();
+      const add = (kind: "layout" | "message", entry: string, l: Layout) => {
+        for (const f of l.fields) {
+          for (const e of new Set(enumsOf(f))) {
+            const list = byEnum!.get(e);
+            if (list) list.push([kind, entry, f, l]);
+            else byEnum!.set(e, [[kind, entry, f, l]]);
+          }
+        }
+      };
+      for (const [n, l] of Object.entries(p.layouts)) add("layout", n, l);
+      for (const [n, m] of Object.entries(p.messages)) if (m.payload !== undefined && typeof m.payload !== "string") add("message", n, m.payload);
+    }
+    return byEnum.get(e) ?? [];
+  };
   for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
-    const exempt = tailOnlyLayouts({ ...p.messages, ...d.messages }, { ...p.layouts, ...d.layouts });
+    const prefix = `firmware ${fw}: `;
+    const enums = { ...baseEnums, ...d.enums };
+    const allFw = { ...p.layouts, ...d.layouts };
+    const exempt = tailOnlyLayouts({ ...p.messages, ...d.messages }, allFw);
     // a base layout exempt in the base but sent as is on this firmware is checked here
     const lays = { ...d.layouts };
     for (const n of baseExempt) if (!exempt.has(n) && !has(lays, n)) lays[n] = p.layouts[n];
@@ -1084,7 +1320,16 @@ function sevenBitIssues(p: ProtocolShape): string[] {
     const msgs = { ...d.messages };
     for (const [n, m] of Object.entries(p.messages)) if (!has(msgs, n) && newRecord(m.payload)) msgs[n] = m;
     for (const [n, l] of Object.entries(p.layouts)) if (!has(lays, n) && !exempt.has(n) && newRecord(l)) lays[n] = l;
-    scan(`firmware ${fw}: `, msgs, lays, exempt, { ...p.layouts, ...d.layouts });
+    scan(prefix, msgs, lays, exempt, allFw, enums);
+    // base entries it keeps whose fields name an enum it replaces: their values change with it
+    for (const e of Object.keys(d.enums ?? {})) {
+      for (const [kind, entry, f, l] of fieldsNaming(e)) {
+        // scanned above already (its own entries and the base ones it rechecks), or never sent as is
+        if (has(kind === "layout" ? lays : msgs, entry) || (kind === "layout" && exempt.has(entry))) continue;
+        // a field the base already fails on is reported once, as the base's
+        if (fits(f, l, p.layouts, baseEnums)) fieldIssue(`${prefix}${kind} ${entry}`, f, l, allFw, enums);
+      }
+    }
   }
   return out.slice(0, MAX_ISSUES);
 }
@@ -1112,6 +1357,8 @@ function packedLayoutIssues(p: ProtocolShape): string[] {
       if (all[t].packed) out.push(`${w}: layout "${t}" has a packed tail of its own`);
       // the codec settles choices on the layout's own fields only, so one in a tail would go out in the map's byte order
       if (all[t].fields.some(isChoiceField)) out.push(`${w}: layout "${t}" has a field with a choice, which a packed tail does not settle`);
+      // enumBy reads by the message's own layout, so one in a tail would read and take numbers only
+      if (all[t].fields.some((f) => f.type !== "bytes" && f.type !== "string" && f.type !== "pad" && f.enumBy)) out.push(`${w}: layout "${t}" has a field with enumBy, which a packed tail does not read`);
       if (l.packed!.pieces !== undefined) {
         // with `layout` too (refused in packedIssues), t is not the record: its record checks would mislead
         if (l.packed!.layout === undefined) out.push(...recordIssues(w, l, l.packed!, t, all[t]));
@@ -1317,6 +1564,9 @@ function piecesIssues(p: ProtocolShape): string[] {
       if (pieces.offset === "address") {
         if (p.transport.framing !== "roland-address") out.push(`${where}: offset "address" needs a roland-address transport`);
         if (pieces.layout !== undefined) out.push(`${where}: by address the pieces are slices of the reply, read with its own layout: layout goes with an offset field`);
+        if (pieces.step !== undefined && pieces.maxPiece !== undefined && pieces.step > pieces.maxPiece) out.push(`${where}: step ${pieces.step} is over maxPiece ${pieces.maxPiece}`);
+      } else if (pieces.step !== undefined) {
+        out.push(`${where}: step goes with offset "address": by an offset field each piece says where it goes`);
       } else if (!isSingleScalar(fieldOf(reply, pieces.offset.field))) {
         out.push(`${where}: offset field "${pieces.offset.field}" must be a single number in "${reply}"`);
       } else {
@@ -1366,21 +1616,65 @@ function parametersIssues(p: ProtocolShape): string[] {
   const types = p.enums?.type;
   const groups = Object.values(P.groups);
   if (!types && groups.some((g) => g.types)) out.push("parameters: tables keyed by effect type need the type enum");
+  // the block and type enums as each firmware has them: a table may name a block or type only some firmwares have
+  const views = [
+    { prefix: "", block: blocks, type: types },
+    ...Object.entries(p.firmwares ?? {})
+      .filter(([, d]) => d.enums?.block || d.enums?.type)
+      .map(([fw, d]) => ({ prefix: `firmware ${fw}: `, block: d.enums?.block ?? blocks, type: d.enums?.type ?? types })),
+  ];
   // a type's parameters are checked under its key, as a block's are under its own: one name for both would share them
-  if (types && blocks && groups.some((g) => g.types)) {
-    for (const k of Object.keys(types)) if (has(blocks, k)) out.push(`parameters: "${k}" is both a block and an effect type; give them different keys`);
+  if (groups.some((g) => g.types)) {
+    // a clash the base has is reported once, not again for every firmware; each firmware's own clash is its own
+    const baseClashes = new Set<string>();
+    for (const v of views) {
+      if (!v.type || !v.block) continue;
+      for (const k of Object.keys(v.type)) {
+        if (!has(v.block, k) || (v !== views[0] && baseClashes.has(k))) continue;
+        if (v === views[0]) baseClashes.add(k);
+        out.push(`${v.prefix}parameters: "${k}" is both a block and an effect type; give them different keys`);
+      }
+    }
   }
-  const owner = new Map<string, string>();
+  // a block or type has one table in each mode: the groups as each mode sees them (a stand-in only under the name it
+  // stands in for) are checked apart, so a mode's group may list what another mode's lists
+  const modeViews: [string, Parameters["groups"]][] = [["", groupsInMode(p, {})]];
+  for (const [mode, use] of Object.entries(p.modes?.use ?? {})) if (use.groups) modeViews.push([`mode ${mode}: `, groupsInMode(p, use)]);
+  // (crossCheck collects issues in a set, so one a view repeats is reported once)
+  for (const [where, view] of modeViews) {
+    const owner = new Map<string, string>();
+    for (const [g, group] of Object.entries(view)) {
+      for (const [kind, k] of [...(group.blocks ?? []).map((k) => ["block", k] as const), ...(group.types ?? []).map((k) => ["type", k] as const)]) {
+        const first = owner.get(`${kind}:${k}`);
+        if (first === undefined) owner.set(`${kind}:${k}`, g);
+        else out.push(`${where}parameters.${g}: ${kind} "${k}" is already in ${first}`);
+      }
+    }
+  }
+  // a group's blocks and types are keys of the enums of the mode it is used in (a stand-in group only in its mode), on
+  // the base map or on some firmware: a table may name a block or type only some firmwares have, but each key must be
+  // one that some firmware has in that mode
+  const fwEnums = [p.enums ?? {}, ...Object.values(p.firmwares ?? {}).flatMap((d) => (d.enums ? [{ ...p.enums, ...d.enums }] : []))];
+  const anyFirmware = fwEnums.length > 1 ? " on any firmware" : "";
+  const enumViews: [string, Parameters["groups"], Record<string, Record<string, number>>[]][] = [["", groupsInMode(p, {}), fwEnums]];
+  for (const [mode, use] of Object.entries(p.modes?.use ?? {})) {
+    if (use.groups || use.enums) enumViews.push([`mode ${mode}: `, groupsInMode(p, use), fwEnums.map((e) => inMode(e, use.enums))]);
+  }
+  for (const [where, view, enumsByFirmware] of enumViews) {
+    // the keys each kind has on some firmware in this mode, gathered once rather than searched per table key
+    const keysOf = (kind: "block" | "type") => {
+      const withKind = enumsByFirmware.filter((e) => has(e, kind));
+      return withKind.length ? new Set(withKind.flatMap((e) => Object.keys(e[kind]))) : undefined;
+    };
+    const known = { block: keysOf("block"), type: keysOf("type") };
+    for (const [g, group] of Object.entries(view)) {
+      const keys = [...(group.blocks ?? []).map((k) => ["block", k] as const), ...(group.types ?? []).map((k) => ["type", k] as const)];
+      for (const [kind, k] of keys) if (known[kind] && !known[kind].has(k)) out.push(`${where}parameters.${g}: "${k}" is not a key of the ${kind} enum${anyFirmware}`);
+    }
+  }
   for (const [g, group] of Object.entries(P.groups)) {
     if (!group.blocks && !group.types) out.push(`parameters.${g}: needs blocks or types`);
     if (group.blocks && group.types) out.push(`parameters.${g}: has both blocks and types; give one`);
-    const keys = [...(group.blocks ?? []).map((k) => ["block", k, blocks] as const), ...(group.types ?? []).map((k) => ["type", k, types] as const)];
-    for (const [kind, k, e] of keys) {
-      if (e && !has(e, k)) out.push(`parameters.${g}: "${k}" is not a key of the ${kind} enum`);
-      const first = owner.get(`${kind}:${k}`);
-      if (first !== undefined) out.push(`parameters.${g}: ${kind} "${k}" is already in ${first}`);
-      else owner.set(`${kind}:${k}`, g);
-    }
     const ids = new Map<number, string>();
     for (const [n, x] of Object.entries(group.params)) {
       const where = `parameters.${g}.${n}`;
@@ -1397,11 +1691,135 @@ function parametersIssues(p: ProtocolShape): string[] {
       if (fault) out.push(`${where}: default ${x.default} ${fault}`);
       if (out.length >= MAX_ISSUES) return out;
     }
+    out.push(...linkedIssues(g, group.params, group.linked ?? {}, P.knobMax));
+    if (out.length >= MAX_ISSUES) return out;
   }
   return out;
 }
 
-/** Why a parameter's default is not a value it can take, or undefined when it is one. */
+/**
+ * Linked sets name parameters of their own table, each at most once and in one set only; a rule's run is a run of
+ * its set's parameters in the set's order; `repeatable` goes with a distinct rule and names values its parameters can
+ * take.
+ */
+function linkedIssues(g: string, params: Record<string, Parameter>, linked: Record<string, LinkedSetDef>, knobMax: number): string[] {
+  const out: string[] = [];
+  const inSet = new Map<string, string>();
+  for (const [n, set] of Object.entries(linked)) {
+    const where = `parameters.${g}.linked.${n}`;
+    for (const p of set.params) {
+      if (!has(params, p)) out.push(`${where}: "${p}" is not a parameter of this table`);
+      const first = inSet.get(p);
+      if (first !== undefined) out.push(`${where}: "${p}" is already in ${first === n ? "this set" : `linked.${first}`}`);
+      else inSet.set(p, n);
+    }
+    for (const [i, r] of (set.rules ?? []).entries()) {
+      const run = r.params ?? set.params;
+      const at = set.params.indexOf(run[0]);
+      if (at < 0 || run.some((p, j) => set.params[at + j] !== p)) out.push(`${where}.rules.${i}: its params must be a run of the set's, in the set's order`);
+      if (r.kind === "distinct") {
+        for (const v of r.repeatable ?? []) {
+          if (!run.some((p) => has(params, p) && !defaultFault(params[p], v, knobMax))) out.push(`${where}.rules.${i}: repeatable ${v} is a value none of its parameters takes`);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Modes: the read is a request whose reply carries the field, reading an enum whose keys are the modes; each mode `use`
+ * lists is one of them. A stand-in and the name it stands in for are both the map's own (base) entries of that kind, a
+ * message stands in only for one in the same direction, and no name both stands in and is stood in for. What is read
+ * before the mode is known (the read, its reply, the mode enum, and the on-connect steps with their replies) is the
+ * same in every mode, and the read is never blocked. A block on the map's own message holds in every mode, even one
+ * that stands an unblocked entry in for it. No group a mode stands in for, nor its stand-in, has linked sets.
+ */
+function modesIssues(p: ProtocolShape): string[] {
+  const out: string[] = [];
+  const M = p.modes;
+  if (!M) return out;
+  const read = M.read;
+  if (!has(p.messages, read.message)) return [`modes.read: "${read.message}" is not a message`];
+  const request = p.messages[read.message];
+  if (request.dir !== "request") out.push(`modes.read: "${read.message}" must be a request, not a ${request.dir}`);
+  // every tool call starts by reading the mode, so blocking the read would refuse them all
+  if (p.blocked?.includes(read.message)) out.push(`modes.read: "${read.message}" is blocked, and every tool call reads the mode first`);
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
+    if (d.blocked?.includes(read.message)) out.push(`modes.read: "${read.message}" is blocked on firmware ${fw}, and every tool call reads the mode first`);
+  }
+  const { reply, field } = modeReadField(p)!;
+  const e = modeEnum(p);
+  if (!field) out.push(`modes.read: the reply "${reply}" has no field "${read.field}"`);
+  else if (e === undefined) out.push(`modes.read: the reply's field "${read.field}" must read an enum (its keys are the modes)`);
+  else if (!p.enums || !has(p.enums, e)) out.push(`modes.read: no enum "${e}"`);
+  const modes = e !== undefined && p.enums && has(p.enums, e) ? p.enums[e] : undefined;
+  const tables: Record<ModeKind, Record<string, unknown>> = {
+    messages: p.messages,
+    layouts: p.layouts,
+    enums: p.enums ?? {},
+    constants: p.constants ?? {},
+    groups: p.parameters?.groups ?? {},
+  };
+  // read before the mode is known, so the same in every mode
+  // (the request's and the reply's named payload layouts too: the reply is decoded in the mode the unit was last seen in)
+  // (and the on-connect steps with all that answers them, their layouts and the enums those read: they go out with
+  // the map's own entries, before the mode is read)
+  const steps = (p.session?.onConnect ?? []).flatMap((s) => (s.message !== undefined && has(p.messages, s.message) ? [s.message] : []));
+  const answers = (m: Message) => [m.reply?.message, m.reply?.list?.start, m.reply?.list?.end, m.ack?.message].flatMap((a) => (a === undefined ? [] : [a]));
+  const stepMessages = [...steps, ...steps.flatMap((m) => answers(p.messages[m]))].filter((m) => has(p.messages, m));
+  const stepLayouts = steps.flatMap((m) => p.messages[m].reply?.pieces?.layout ?? []);
+  const stepEnums = [...stepMessages.map((m) => messageLayout(p.messages[m], p.layouts)), ...stepLayouts.map((l) => (has(p.layouts, l) ? p.layouts[l] : undefined))]
+    .flatMap((l) => l?.fields ?? [])
+    .flatMap((f) => ("enum" in f && typeof f.enum === "string" ? [f.enum] : []));
+  const early = [read.message, reply, ...stepMessages];
+  const named = early.flatMap((m) => (has(p.messages, m) && typeof p.messages[m].payload === "string" ? [p.messages[m].payload as string] : []));
+  const fixed: Partial<Record<ModeKind, string[]>> = { messages: early, layouts: [...named, ...stepLayouts], enums: [...(e === undefined ? [] : [e]), ...stepEnums] };
+  for (const kind of MODE_KINDS) {
+    const standing = standIns(p, kind);
+    for (const [mode, u] of Object.entries(M.use)) {
+      const where = `modes.use.${mode}.${kind}`;
+      for (const [n, sub] of Object.entries(u[kind] ?? {})) {
+        if (!has(tables[kind], n)) out.push(`${where}: "${n}" is not one of the map's ${kind}`);
+        if (sub !== null && !has(tables[kind], sub)) out.push(`${where}: "${sub}" (for "${n}") is not one of the map's ${kind}`);
+        if (sub === n) out.push(`${where}: "${n}" stands in for itself`);
+        if (standing.has(n)) out.push(`${where}: "${n}" stands in for another entry in some mode, so it can't be stood in for`);
+        for (const x of [n, sub]) if (x !== null && fixed[kind]?.includes(x)) out.push(`${where}: "${x}" is read before the mode is known, so it is the same in every mode`);
+        if (kind === "messages" && sub !== null && has(p.messages, n) && has(p.messages, sub) && p.messages[n].dir !== p.messages[sub].dir) {
+          out.push(`${where}: "${sub}" is a ${p.messages[sub].dir} and can't stand in for the ${p.messages[n].dir} "${n}"`);
+        }
+      }
+    }
+  }
+  // linked sets are read from the map's own groups (linked-params.ts), not as a mode sees them: a group a mode
+  // replaces, or one that stands in for another, would take or drop its sets unseen, so neither may carry any
+  const groups = p.parameters?.groups ?? {};
+  for (const [mode, u] of Object.entries(M.use)) {
+    for (const [n, sub] of Object.entries(u.groups ?? {})) {
+      for (const g of [n, sub]) {
+        if (g !== null && has(groups, g) && Object.keys(groups[g].linked ?? {}).length) {
+          out.push(`modes.use.${mode}.groups: "${g}" has linked sets, which are read from the map's own groups only, so a mode can't stand a group in for it or for one it stands in for`);
+        }
+      }
+    }
+  }
+  // a firmware's enum replaces the map's own by name, and a mode then reads some names as its stand-ins: a firmware that
+  // replaces a name a mode stands in, but not the stand-in, would not apply in that mode, and nothing would say so
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
+    for (const [mode, u] of Object.entries(M.use)) {
+      for (const [n, sub] of Object.entries(u.enums ?? {})) {
+        if (sub === null || !has(d.enums ?? {}, n) || has(d.enums ?? {}, sub)) continue;
+        out.push(
+          `firmware ${fw}: replaces enum "${n}", which mode ${mode} reads as "${sub}"; the firmware keeps the map's own "${sub}", so its "${n}" would not apply in that mode: give "${sub}" on the firmware too`,
+        );
+      }
+    }
+  }
+  if (modes) for (const mode of Object.keys(M.use)) if (!has(modes, mode)) out.push(`modes.use: "${mode}" is not a key of the ${e} enum (the modes)`);
+  return out.slice(0, MAX_ISSUES);
+}
+
+/** Why a raw value (a parameter's default, a linked set's repeatable value) is not one it can take, or undefined when it is one. */
 function defaultFault(x: z.infer<typeof ParameterSchema>, d: number, knobMax: number): string | undefined {
   if (x.options && Object.keys(x.options).length) return has(x.options, String(d)) ? undefined : "is not one of its options";
   // a range without both ends is reported on its own
@@ -1428,6 +1846,10 @@ function connectIssues(p: ProtocolShape): string[] {
       continue;
     }
     if (m.dir !== "request" && m.dir !== "send") out.push(`${where}: ${n} is a ${m.dir}; the host sends a request or send`);
+    // a control-only unit answers nothing (its driver reads no reply), so a request would never be answered
+    else if (m.dir === "request" && p.driver === "control-only") out.push(`${where}: ${n} is a request, and a control-only unit answers nothing: a step only sends`);
+    // the control-only driver frames a step as one SysEx message, which a nibble transport's chunked frames are not
+    if (p.driver === "control-only" && p.transport.framing === "sysex-nibbles") out.push(`${where}: a control-only map sends a step on a sysex-xor, sysex-plain or roland-address transport, not sysex-nibbles`);
     const fw = Object.entries(p.firmwares ?? {}).find(([, d]) => d.blocked?.includes(n))?.[0];
     const blocker = p.blocked?.includes(n) ? "the base map" : fw !== undefined ? `firmware ${fw}` : undefined;
     if (blocker) out.push(`${where}: ${n} is blocked on ${blocker}, and steps go out before the firmware is known`);
@@ -1519,6 +1941,37 @@ function choicesIssues(p: ProtocolShape): string[] {
   return [...new Set(out)].slice(0, MAX_ISSUES);
 }
 
+/**
+ * Firmware ranges: each runs from before where it ends, and no version falls in two entries' ranges, so a version
+ * reads one entry. An entry keyed by exactly a version still wins over a range that holds it.
+ */
+function firmwareRangeIssues(p: ProtocolShape): string[] {
+  const out: string[] = [];
+  // two keys that are one version written two ways ("4.0" and "4.00") would leave that version two entries
+  const byVersion = new Map<string, string>();
+  for (const fw of Object.keys(p.firmwares ?? {})) {
+    const v = versionParts(fw);
+    if (!v) continue;
+    const norm = v.join(".").replace(/(\.0)+$/, "");
+    const twin = byVersion.get(norm);
+    if (twin !== undefined) out.push(`firmware ${fw}: is the same version as firmware ${twin}; a version must read one entry`);
+    else byVersion.set(norm, fw);
+  }
+  const ranged = Object.entries(p.firmwares ?? {}).filter(([, d]) => d.range !== undefined);
+  for (const [fw, d] of ranged) {
+    const { from, below } = d.range!;
+    if (from !== undefined && below !== undefined && compareVersions(versionParts(from)!, versionParts(below)!) >= 0) {
+      out.push(`firmware ${fw}: range.from ${from} must be before range.below ${below}`);
+    }
+  }
+  for (let i = 0; i < ranged.length; i++) {
+    for (let j = i + 1; j < ranged.length; j++) {
+      if (rangesOverlap(ranged[i][1].range!, ranged[j][1].range!)) out.push(`firmware ${ranged[j][0]}: its range overlaps firmware ${ranged[i][0]}'s; a version must read one entry`);
+    }
+  }
+  return out.slice(0, MAX_ISSUES);
+}
+
 function crossCheck(p: ProtocolShape): string[] {
   const floor: string[] = [];
   for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
@@ -1554,9 +2007,19 @@ function crossCheck(p: ProtocolShape): string[] {
   }
   const law = p.audio?.volumeLaw;
   if (law && !(law.min <= law.quietest && law.quietest <= law.max && law.min < law.max)) floor.push("audio.volumeLaw: needs min <= quietest <= max, min < max");
+  // blocks the base keeps always on stay always on: a firmware's noBypass may add blocks, never drop one
+  // (the first dropped block per firmware, so a long base list can't multiply into one issue per key per firmware)
+  const alwaysOn = Object.keys(p.enums?.noBypass ?? {});
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
+    const own = d.enums?.noBypass;
+    const dropped = own ? alwaysOn.find((k) => !has(own, k)) : undefined;
+    if (dropped !== undefined) floor.push(`firmware ${fw}: enums.noBypass drops "${dropped}"; a firmware may only add blocks that can't be bypassed`);
+  }
   if (p.audio && p.enums) {
-    const src = p.enums.inputSource ?? {};
-    for (const k of [p.audio.reamp.source, p.audio.reamp.liveSource]) if (!has(src, k)) floor.push(`audio.reamp: "${k}" is not an inputSource key`);
+    const sources: [string, Record<string, number> | undefined][] = [["", p.enums.inputSource], ...Object.entries(p.firmwares ?? {}).filter(([, d]) => d.enums?.inputSource).map(([fw, d]): [string, Record<string, number> | undefined] => [`firmware ${fw}: `, d.enums!.inputSource])];
+    for (const [prefix, src] of sources) {
+      for (const k of [p.audio.reamp.source, p.audio.reamp.liveSource]) if (!has(src ?? {}, k)) floor.push(`${prefix}audio.reamp: "${k}" is not an inputSource key`);
+    }
   }
   const r = p.audio?.reamp;
   if (r) {
@@ -1592,6 +2055,8 @@ function crossCheck(p: ProtocolShape): string[] {
   const out = new Set<string>(checkView(base, cmdLength, { layouts: Object.keys(p.layouts), messages: all, scan: all, blocks: base.blocked }));
   // only the nibble framing splits bytes itself; the others send payload bytes as they are
   if (p.transport.framing !== "sysex-nibbles") for (const issue of sevenBitIssues(p)) out.add(issue);
+  if (p.transport.framing === "roland-address") for (const issue of unacknowledgedWriteIssues(p)) out.add(issue);
+  if (p.transport.framing === "roland-address" && p.transport.frame.identityDeviceId && !p.identity) out.add("transport.frame.identityDeviceId: needs the map's identity, which the reply is checked against");
   for (const issue of plainIssues(p)) out.add(issue);
   for (const issue of noChecksumIssues(p)) out.add(issue);
   for (const issue of packedLayoutIssues(p)) out.add(issue);
@@ -1599,7 +2064,12 @@ function crossCheck(p: ProtocolShape): string[] {
   for (const issue of piecesIssues(p)) out.add(issue);
   for (const issue of parametersIssues(p)) out.add(issue);
   for (const issue of choicesIssues(p)) out.add(issue);
+  for (const issue of addressIssues(p)) out.add(issue);
+  for (const issue of modesIssues(p)) out.add(issue);
+  for (const issue of firmwareRangeIssues(p)) out.add(issue);
   for (const issue of connectIssues(p)) out.add(issue);
+  // the views a mode's stand-ins apply to: the base map's and each firmware's
+  const roots: { prefix: string; v: View }[] = [{ prefix: "", v: base }];
   // each firmware as the codec will see it; only what it replaces or adds is checked again in depth
   for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
     if (out.size >= MAX_ISSUES) break;
@@ -1607,14 +2077,19 @@ function crossCheck(p: ProtocolShape): string[] {
       ...base,
       messages: { ...p.messages, ...d.messages },
       layouts: { ...p.layouts, ...d.layouts },
+      // an enum it replaces keeps its name, so only an enum it adds can be new to its own entries
+      enums: d.enums ? { ...enums, ...d.enums } : enums,
       blocked: [...(p.blocked ?? []), ...(d.blocked ?? [])],
     };
+    roots.push({ prefix: `firmware ${fw}: `, v: view });
     const changed = Object.keys(d.messages ?? {});
-    // a block depends on payloads too: a message whose named layout the firmware replaces is scanned again, and a
-    // base block the firmware re-lays out (or redefines) is scanned against every message
+    // a block depends on payloads too: a message whose named layout, or whose packed tail's layout, the firmware
+    // replaces is scanned again, and a base block the firmware re-lays out (or redefines) is scanned against every message
     const relaid = Object.keys(view.messages).filter((n) => {
       const pl = view.messages[n].payload;
-      return typeof pl === "string" && has(d.layouts ?? {}, pl);
+      if (typeof pl === "string" && has(d.layouts ?? {}, pl)) return true;
+      const tail = (typeof pl === "string" ? (has(view.layouts, pl) ? view.layouts[pl] : undefined) : pl)?.packed?.layout;
+      return tail !== undefined && has(d.layouts ?? {}, tail);
     });
     const rescan = [...new Set([...changed, ...relaid])];
     // the blocked-cmd scan: its own messages against every block, and every message against its own blocks
@@ -1632,8 +2107,379 @@ function crossCheck(p: ProtocolShape): string[] {
     };
     // a base problem is reported once, not again for every firmware
     for (const issue of checkView(view, cmdLength, scope)) if (!out.has(issue)) out.add(`firmware ${fw}: ${issue}`);
+    // the mode read and the stand-ins as this firmware has its messages and layouts
+    const modesView = { ...p, messages: view.messages, layouts: view.layouts, constants: { ...p.constants, ...d.constants } };
+    for (const issue of modesIssues(modesView)) if (!out.has(issue)) out.add(`firmware ${fw}: ${issue}`);
+  }
+  // each mode as the codec will see it, in the base map and in each firmware: its stand-ins can lay out a send or a
+  // blocked message otherwise, so the blocked-cmd scan runs again (a problem the view it builds on has is not repeated)
+  for (const [mode, u] of Object.entries(p.modes?.use ?? {})) {
+    if (!u.messages && !u.layouts) continue;
+    for (const r of roots) {
+      if (out.size >= MAX_ISSUES) break;
+      const v = modeView(r.v, u);
+      for (const issue of blockIssues(v, { scan: Object.keys(v.messages), blocks: blockedBytes(r.v, u, v) })) {
+        // a blocked message kept under AS_BLOCKED is the same problem as under its own name
+        const plain = issue.replace(AS_BLOCKED, "");
+        if (![plain, `${r.prefix}${plain}`, `mode ${mode}: ${plain}`, `${r.prefix}mode ${mode}: ${plain}`].some((x) => out.has(x))) out.add(`${r.prefix}mode ${mode}: ${issue}`);
+      }
+    }
   }
   return [...out].slice(0, MAX_ISSUES);
+}
+
+/**
+ * On roland-address a unit never acknowledges a write (a send), so the map says how it is checked: the read that reads
+ * it back (`readBack`), or `"readBack": false` where the unit has none and only the player can confirm it. Left
+ * unsaid, the write's trust would stay unchecked with no way for the unit to raise it.
+ */
+function unacknowledgedWriteIssues(p: ProtocolShape): string[] {
+  const out: string[] = [];
+  // a blocked write is never sent, so nothing is left to check
+  const check = (prefix: string, messages: Record<string, Message>, blocked: string[]) => {
+    for (const [n, m] of Object.entries(messages)) {
+      if (m.dir === "send" && m.readBack === undefined && !blocked.includes(n)) {
+        out.push(`${prefix}message ${n}: a write on a roland-address transport is never acknowledged: name the read that reads it back in readBack, or set "readBack": false if the unit has none`);
+      }
+    }
+  };
+  const blocked = p.blocked ?? [];
+  check("", p.messages, blocked);
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) check(`firmware ${fw}: `, d.messages ?? {}, [...blocked, ...(d.blocked ?? [])]);
+  return out;
+}
+
+/** How a mode's view names a blocked message whose own name the mode stands in for, or drops: its bytes stay blocked. */
+const AS_BLOCKED = " (its own bytes, blocked)";
+
+/**
+ * A view with a mode's stand-ins applied, as the codec sees it there: each name a mode stands in reads as its
+ * stand-in, and a name standing in for a blocked message is blocked too (the codec refuses to encode all of these).
+ * A block is on the bytes, not the name: a blocked message whose name the mode stands in for, or drops, stays in the
+ * view under its name and AS_BLOCKED, laid out as the mode lays it out, so no send there can make its bytes.
+ */
+function modeView(v: View, u: ModeUse): View {
+  const blocked = new Set(v.blocked);
+  for (const [n, sub] of Object.entries(u.messages ?? {})) if (sub !== null && blocked.has(sub)) blocked.add(n);
+  const messages = inMode(v.messages, u.messages);
+  for (const b of v.blocked) {
+    if (!u.messages || !has(u.messages, b) || !has(v.messages, b)) continue;
+    messages[`${b}${AS_BLOCKED}`] = v.messages[b];
+    blocked.add(`${b}${AS_BLOCKED}`);
+  }
+  return { ...v, messages, layouts: inMode(v.layouts, u.layouts), blocked: [...blocked] };
+}
+
+/**
+ * The names in a mode's view that hold a blocked message's bytes, once each: a blocked message the mode leaves as it
+ * is, and one kept under AS_BLOCKED. A name standing in for a blocked message is refused by the codec and has the same
+ * bytes as one of those, so it is not held against the sends again; a blocked name standing in for a safe message has
+ * that message's bytes, so nothing is held against them.
+ */
+function blockedBytes(root: View, u: ModeUse, v: View): string[] {
+  const blocked = new Set(root.blocked);
+  return Object.keys(v.messages).filter((n) => n.endsWith(AS_BLOCKED) || (blocked.has(n) && !(u.messages && has(u.messages, n))));
+}
+
+/** Keys an address field may not have: each would give it bytes or a reading of its own in the payload. */
+const ADDRESS_FIELD_REFUSES = ["offset", "repeat", "bits", "invert", "septets", "nibbles", "checksum", "choice", "nullAs", "copyOf", "saturate", "enumBy"] as const;
+
+/**
+ * Address fields (roland-address): unsigned scalars in a message's own payload, with a fixed cmd, a stride or a table
+ * whose keys are the field's enum's, never moving the address past its last digit, and a reply that carries the same
+ * ones (its address moves with the request's). An address field may not reach a blocked message's bytes: any address
+ * it can move a send or request to is checked against the blocked messages with the same command bytes, the blocked
+ * one's whole span (a write covers its address and the bytes after it).
+ */
+function addressIssues(p: ProtocolShape): string[] {
+  const out: string[] = [];
+  const t = p.transport;
+  const tables = p.addresses ?? {};
+  type Enums = View["enums"];
+  const enums: Enums = p.enums ?? {};
+  const roland = t.framing === "roland-address";
+  if (p.addresses && !roland) out.push(`addresses: address tables need the roland-address framing, not ${t.framing}`);
+  const fieldsOf = (m: Message): AddressField[] => (typeof m.payload === "object" ? m.payload.fields.filter(isAddressField) : []);
+  // each view's fields read with its own enums: a firmware replaces whole enums by name or adds its own, a mode stands
+  // one in for another, as the codec reads them there
+  const checkFields = (prefix: string, msgs: Record<string, Message>, lays: Record<string, Layout>, enums: Enums) => {
+    for (const [n, l] of Object.entries(lays)) {
+      if (l.fields.some(isAddressField)) out.push(`${prefix}layout ${n}: address fields go in a message's own payload, not a shared layout`);
+    }
+    for (const [n, m] of Object.entries(msgs)) {
+      const fields = fieldsOf(m);
+      if (!fields.length) continue;
+      const where = `${prefix}message ${n}`;
+      if (!roland) {
+        out.push(`${where}: address fields need the roland-address framing, not ${t.framing}`);
+        continue;
+      }
+      if (m.cmd.includes("{")) out.push(`${where}: a message with address fields has a fixed cmd`);
+      for (const f of fields) {
+        const at = `${where}: address field ${f.name}`;
+        if (f.type !== "u8" && f.type !== "u16" && f.type !== "u32") out.push(`${at} is an unsigned integer`);
+        for (const k of ADDRESS_FIELD_REFUSES) if (f[k] !== undefined) out.push(`${at} takes no ${k} (it has no payload bytes)`);
+        if (f.enum !== undefined && !has(enums, f.enum)) out.push(`${at}: unknown enum "${f.enum}"`);
+        if (f.address.table !== undefined) {
+          const table = f.address.table;
+          if (!has(tables, table)) out.push(`${at}: no address table "${table}"`);
+          else if (f.enum === undefined) out.push(`${at}: a table is keyed by the field's enum, and it names none`);
+          else if (has(enums, f.enum)) {
+            for (const k of Object.keys(tables[table])) if (!has(enums[f.enum], k)) out.push(`${at}: table ${table} key "${k}" is not a key of enum ${f.enum}`);
+          }
+        }
+      }
+    }
+  };
+  // each message's terms once per enums: the reach check asks for them per blocked message, and views with the same
+  // enums share them
+  const termCache = new Map<Enums, Map<Message, AddressTerm[]>>();
+  const termsOf = (v: View, m: Message) => {
+    let c = termCache.get(v.enums);
+    if (!c) termCache.set(v.enums, (c = new Map()));
+    const ctx: CodecContext = { endian: t.endian, enums: v.enums };
+    return c.get(m) ?? c.set(m, fieldsOf(m).map((f) => addressTerm(f, ctx, tables))).get(m)!;
+  };
+  // a cmd's command bytes, and the lowest and highest address it names: an {arg} digit may be anything from 00 to 7f
+  const split = (m: Message) => {
+    // types only: a transport without an inner header (midi-channel) never gets here with an address field
+    const at = (t as { inner: { cmdLength: number } }).inner.cmdLength - (roland ? t.inner.addressBytes : 0);
+    const c = m.cmd.split(" ");
+    const digits = (fill: string) => addressOfHex(c.slice(at).map((x) => (x.startsWith("{") ? fill : x)).join(" "));
+    return { command: c.slice(0, at).join(" "), lo: digits("00"), hi: digits("7f") };
+  };
+  const span = (v: View, m: Message) => {
+    const l = m.payload === undefined ? { fields: [] } : typeof m.payload === "string" ? v.layouts[m.payload] : m.payload;
+    // a request on a write command writes its payload as a send does (an answered write); a read's payload sits on
+    // another command, which the command-bytes test sets apart
+    return (m.dir === "send" || m.dir === "request") && l ? Math.max(1, layoutSize(l), l.maxSize ?? 0) : 1;
+  };
+  let shaped = true;
+  // targets: the names whose bytes are a blocked message's (a mode's view picks them with blockedBytes)
+  const checkView = (prefix: string, v: View, targets: string[]) => {
+    if (!roland || !shaped) return;
+    const msgs = v.messages;
+    const last = 128 ** t.inner.addressBytes;
+    for (const [n, m] of Object.entries(msgs)) {
+      const fields = fieldsOf(m);
+      if (!fields.length) continue;
+      const terms = termsOf(v, m);
+      if (split(m).hi + terms.reduce((x, y) => x + termMax(y), 0) >= last) out.push(`${prefix}message ${n}: its address fields can move it past the last address`);
+      if (!addressesApart(terms)) out.push(`${prefix}message ${n}: two sets of its address values can reach one address (an area runs into the next); narrow the fields with min and max, or move the areas apart`);
+      if (m.dir !== "request" || !m.reply) continue;
+      const r = m.reply.message ?? n;
+      if (!has(msgs, r)) continue;
+      const own = new Set(fields.map((f) => f.name));
+      const theirs = fieldsOf(msgs[r]);
+      // the reply's address and values come from the request's wire values, read with the reply's own field
+      const reads = (f: AddressField) => JSON.stringify([f.type, f.address.stride ?? null, f.address.table ?? null, f.enum ?? null, f.scale ?? 1, f.bias ?? 0]);
+      for (const f of fields) {
+        const x = theirs.find((y) => y.name === f.name);
+        if (!x) out.push(`${prefix}message ${n}: its reply ${r} carries its address field ${f.name} too (its address moves with the request's)`);
+        else if (reads(x) !== reads(f)) out.push(`${prefix}message ${n}: its reply ${r} has address field ${f.name} with the request's type, address, enum, scale and bias`);
+      }
+      for (const f of theirs) if (!own.has(f.name)) out.push(`${prefix}message ${n}: its reply ${r} has address field ${f.name}, which the request does not`);
+    }
+    // a list's start and end are matched by their own fixed cmd: an address field would move them where none is heard
+    for (const [n, m] of Object.entries(msgs)) {
+      const list = m.reply?.list;
+      if (!list) continue;
+      for (const e of [list.start, list.end]) if (e !== undefined && has(msgs, e) && fieldsOf(msgs[e]).length) out.push(`${prefix}message ${n}: its list's ${e === list.end ? "end" : "start"} ${e} has address fields; a list's start and end sit at a fixed cmd`);
+    }
+    // a reply answering a request without address fields has none of its own to read
+    for (const [n, m] of Object.entries(msgs)) {
+      if (m.dir !== "request" || !m.reply || fieldsOf(m).length) continue;
+      const r = m.reply.message ?? n;
+      if (has(msgs, r) && fieldsOf(msgs[r]).length) out.push(`${prefix}message ${n}: its reply ${r} has address fields, which the request does not`);
+    }
+    // reach: any address a send or request can be moved to, against each blocked message's span
+    const blocked = new Set(v.blocked);
+    for (const b of targets) {
+      if (!has(msgs, b)) continue;
+      const bm = msgs[b];
+      const bt = termsOf(v, bm);
+      const bs = split(bm);
+      // its whole area: every address its fields and {arg} digits can name, and its write's span past the last
+      const from = bs.lo + bt.reduce((x, y) => x + termMin(y), 0);
+      const to = bs.hi + bt.reduce((x, y) => x + termMax(y), 0) + span(v, bm) - 1;
+      for (const [n, m] of Object.entries(msgs)) {
+        if (out.length >= MAX_ISSUES) return;
+        if (blocked.has(n) || (m.dir !== "send" && m.dir !== "request")) continue;
+        // pairs without address fields keep the blocked-cmd scan's rules; an equal cmd with address fields on either
+        // side is searched too, since that scan compares only the unmoved cmds
+        if (!fieldsOf(m).length && !bt.length) continue;
+        const ms = split(m);
+        if (!cmdsOverlap(ms.command, bs.command)) continue;
+        let hits: number[][];
+        try {
+          hits = searchAddress(termsOf(v, m), from - ms.hi - span(v, m) + 1, to - ms.lo, 1);
+        } catch (e) {
+          if (!(e instanceof AddressSearchTooLong)) throw e;
+          out.push(`${prefix}message ${n}: too many addresses to check against the blocked "${b}"; narrow its address fields with min and max`);
+          continue;
+        }
+        if (hits.length) out.push(`${prefix}message ${n}: its address fields can reach the blocked "${b}"`);
+      }
+    }
+  };
+  const fwEnums = (d: NonNullable<ProtocolShape["firmwares"]>[string]): Enums => (d.enums ? { ...enums, ...d.enums } : enums);
+  checkFields("", p.messages, p.layouts, enums);
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) checkFields(`firmware ${fw}: `, d.messages ?? {}, d.layouts ?? {}, fwEnums(d));
+  // the address search needs well-formed address fields; an address the shape check refuses (a digit past 7 bits)
+  // is reported there
+  shaped = out.length === 0;
+  const viewChecked = (prefix: string, v: View, targets: string[]) => {
+    try {
+      checkView(prefix, v, targets);
+    } catch (e) {
+      // a check that could not finish refuses the map rather than letting it through unchecked
+      if (!(e instanceof ProtocolError)) throw e;
+      out.push(`${prefix}address fields could not be checked: ${e.message}`);
+    }
+  };
+  const base: View = { messages: p.messages, layouts: p.layouts, enums, endian: t.endian, blocked: p.blocked ?? [], settings: p.settings, eq: p.eq };
+  // each view, and the views whose report of the same problem it repeats: a firmware repeats the base, a mode the
+  // base, its firmware and the base in that mode (sibling firmwares each report their own)
+  const views: { prefix: string; v: View; under: string[]; targets?: string[] }[] = [{ prefix: "", v: base, under: [] }];
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
+    views.push({ prefix: `firmware ${fw}: `, v: { ...base, messages: { ...p.messages, ...d.messages }, layouts: { ...p.layouts, ...d.layouts }, enums: fwEnums(d), blocked: [...(p.blocked ?? []), ...(d.blocked ?? [])] }, under: [""] });
+  }
+  // a mode adds no message of its own, but pairs a request with the reply its name stands for there: each mode's view
+  // is checked too (a name standing in for a blocked message is blocked in that mode)
+  const roots = [...views];
+  for (const [mode, u] of Object.entries(p.modes?.use ?? {})) {
+    for (const r of roots) {
+      const v = { ...modeView(r.v, u), enums: u.enums ? inMode(r.v.enums, u.enums) : r.v.enums };
+      // a blocked name standing in for a safe message has that message's bytes, as for the cmd scan: not a target
+      views.push({ prefix: `${r.prefix}mode ${mode}: `, v, under: r.prefix ? ["", r.prefix, `mode ${mode}: `] : [""], targets: blockedBytes(r.v, u, v) });
+    }
+  }
+  for (const { prefix, v, under, targets } of views) {
+    const before = new Set(out);
+    viewChecked(prefix, v, targets ?? v.blocked);
+    // a problem a view it builds on has is reported once, not again for every firmware or mode (a blocked message kept
+    // under AS_BLOCKED is the same problem as under its own name)
+    for (const x of [...out]) {
+      if (before.has(x)) continue;
+      const bare = x.slice(prefix.length).replace(AS_BLOCKED, "");
+      if (under.some((q) => before.has(`${q}${bare}`))) out.splice(out.indexOf(x), 1);
+    }
+  }
+  return out.slice(0, MAX_ISSUES);
+}
+
+/** A send kept apart from a blocked message on a cmd they can share, and what keeps them apart. */
+export interface BlockSeparation {
+  /** The firmware whose view it is in, when it differs from the base map's. */
+  firmware?: string;
+  /** The mode whose stand-ins it is in (in the base map or `firmware`), when it differs from the view without them. */
+  mode?: string;
+  send: string;
+  blocked: string;
+  /**
+   * What the separation rests on: "byte 4: 08 vs 01" (the send's pin, then the blocked one's) or "length: ...". A byte
+   * either side pins inside a packed tail (a nibble or an 8to7 byte its layout's const fixes) ends " (packed tail)": the
+   * least-known part of a map, so a walk or a capture should confirm it first.
+   */
+  by: string;
+}
+
+/**
+ * Every request or send on a cmd that can be a blocked message's, kept apart from it only by its payload (the block is
+ * per message), with what that rests on, for the base map and then each firmware's pairs that are new or rest on
+ * something else there (a base pair a firmware drops, by blocking the send or moving its cmd, is not listed). A
+ * blocked message is half-known, so a pinned byte of it may really be a parameter: these are what a walk, a review or a
+ * unit should confirm. Comparing them across a map change shows a block it lifts (a pair that is new) or moves (a pair whose `by`
+ * changed). Each mode's stand-ins are scanned the same way, in the base map and each firmware, and a pair they make
+ * new or move is listed with `mode`. Sorted by firmware, mode, send and blocked message. At most `limit` pairs: a hostile
+ * map can hold millions, so the scan stops there (base pairs first, then the firmwares in the map's order, then the
+ * modes), and a list of `limit` may be cut short.
+ */
+export function blockSeparations(p: Protocol, limit = MAX_SEPARATIONS): BlockSeparation[] {
+  const endian = p.transport.endian;
+  /** A view's pairs, at most `max` of them: `blocked` has the blocked bytes, `refused` the names never sent. */
+  const viewOf = (messages: Record<string, Message>, layouts: Record<string, Layout>, blocked: string[], max: number, refused: string[] = blocked) => {
+    const out: BlockSeparation[] = [];
+    const shapes = new Map<string, FrameShape | undefined>();
+    const shapeOf = (n: string): FrameShape | undefined => {
+      if (!shapes.has(n)) {
+        const l = messageLayout(messages[n], layouts);
+        shapes.set(n, l && frameShape(l, endian, layouts));
+      }
+      return shapes.get(n);
+    };
+    const blocks = new Set(blocked.filter((b) => has(messages, b)));
+    const never = new Set(refused);
+    // the sends and requests with their cmds split once: a view scans each against every block
+    const sends = Object.entries(messages).flatMap(([n, m]) =>
+      blocks.has(n) || never.has(n) || (m.dir !== "send" && m.dir !== "request") ? [] : [[n, m.cmd.split(" ")] as const],
+    );
+    for (const b of blocks) {
+      const y = shapeOf(b);
+      if (!y) continue;
+      const cmd = messages[b].cmd.split(" ");
+      for (const [n, c] of sends) {
+        if (out.length >= max) return out;
+        // under another header (sysex-plain) its frame starts with other bytes
+        if (messages[n].header !== messages[b].header || !tokensOverlap(c, cmd)) continue;
+        const x = shapeOf(n);
+        const by = x && shapesApart(x, y);
+        if (by) out.push({ send: n, blocked: b, by });
+      }
+    }
+    return out;
+  };
+  const key = (s: BlockSeparation) => `${s.send}\u0000${s.blocked}\u0000${s.by}`;
+  const base = viewOf(p.messages, p.layouts ?? {}, p.blocked ?? [], limit);
+  const seen = new Set(base.map(key));
+  const out = [...base];
+  // the views a mode's stand-ins apply to, with the pairs each lists
+  const roots: { firmware?: string; v: View; seen: Set<string>; size: number }[] = [];
+  const asView = (messages: Record<string, Message>, layouts: Record<string, Layout>, blocked: string[]): View => ({ messages, layouts, blocked, enums: {}, endian, settings: undefined, eq: undefined });
+  roots.push({ v: asView(p.messages, p.layouts ?? {}, p.blocked ?? []), seen, size: base.length });
+  for (const [fw, d] of Object.entries(p.firmwares ?? {})) {
+    if (out.length >= limit) break;
+    const fv = asView({ ...p.messages, ...d.messages }, { ...p.layouts, ...d.layouts }, [...(p.blocked ?? []), ...(d.blocked ?? [])]);
+    // a firmware that replaces no message or layout and adds no block sees the base's list
+    if (!d.messages && !d.layouts && !d.blocked?.length) {
+      roots.push({ firmware: fw, v: fv, seen, size: base.length });
+      continue;
+    }
+    // room for the base pairs it repeats, and for the new ones still to list
+    const view = viewOf(fv.messages, fv.layouts, fv.blocked, base.length + limit - out.length);
+    roots.push({ firmware: fw, v: fv, seen: new Set(view.map(key)), size: view.length });
+    for (const s of view) if (!seen.has(key(s)) && out.length < limit) out.push({ firmware: fw, ...s });
+  }
+  // each mode's stand-ins, in the base map and each firmware: the pairs new or resting on something else there. A pair
+  // left out on a firmware in a mode holds as that firmware's pair where the firmware lists one (it moves the pair),
+  // else as the base map's in that mode, else as the firmware's view has it: a pair is left out only when it is that
+  const pair = (s: BlockSeparation) => `${s.send}\u0000${s.blocked}`;
+  const moved = new Set(out.flatMap((s) => (s.firmware === undefined ? [] : [`${s.firmware}\u0000${pair(s)}`])));
+  for (const [mode, u] of Object.entries(p.modes?.use ?? {})) {
+    if (!u.messages && !u.layouts) continue;
+    let inBase = new Set<string>();
+    let inBasePairs = new Set<string>();
+    for (const r of roots) {
+      if (out.length >= limit) break;
+      const mv = modeView(r.v, u);
+      // a blocked message kept under AS_BLOCKED is listed by its own name: the same pair as without the mode is not new
+      const view = viewOf(mv.messages, mv.layouts, blockedBytes(r.v, u, mv), r.size + inBase.size + limit - out.length, mv.blocked).map((s) =>
+        s.blocked.endsWith(AS_BLOCKED) ? { ...s, blocked: s.blocked.slice(0, -AS_BLOCKED.length) } : s,
+      );
+      if (r.firmware === undefined) {
+        inBase = new Set(view.map(key));
+        inBasePairs = new Set(view.map(pair));
+      }
+      const implied = (s: BlockSeparation) =>
+        (r.firmware === undefined || moved.has(`${r.firmware}\u0000${pair(s)}`) || !inBasePairs.has(pair(s)) ? r.seen : inBase).has(key(s));
+      for (const s of view) {
+        if (implied(s) || out.length >= limit) continue;
+        out.push({ ...(r.firmware === undefined ? {} : { firmware: r.firmware }), mode, ...s });
+      }
+    }
+  }
+  const order = (s: BlockSeparation) => `${s.firmware ?? ""}\u0000${s.mode ?? ""}\u0000${s.send}\u0000${s.blocked}`;
+  return out.sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
 }
 
 /** What a map's channel messages need: a control-only map has some, and a channel-only transport carries nothing else. */
@@ -1763,10 +2609,12 @@ interface FrameShape {
   max: number;
   is: Map<number, number>;
   not: Map<number, number[]>;
+  /** The bytes a packed tail's layout pins (see packedShape). */
+  tail: Set<number>;
 }
 
-function frameShape(l: Layout, endian: "le" | "be"): FrameShape {
-  const shape: FrameShape = { min: l.minSize ?? openStringAt(l) ?? layoutSize(l), max: l.maxSize ?? Infinity, is: new Map(), not: new Map() };
+function frameShape(l: Layout, endian: "le" | "be", layouts: Record<string, Layout> = {}): FrameShape {
+  const shape: FrameShape = { min: l.minSize ?? openStringAt(l) ?? layoutSize(l), max: l.maxSize ?? Infinity, is: new Map(), not: new Map(), tail: new Set() };
   for (const { f, at } of placed(l)) {
     if (f.type === "pad" || f.type === "string") continue;
     if (f.type === "bytes") {
@@ -1798,15 +2646,74 @@ function frameShape(l: Layout, endian: "le" | "be"): FrameShape {
     shape.is.delete(at);
     shape.not.delete(at);
   }
+  if (l.packed) packedShape(shape, layoutSize(l), l.packed, endian, layouts);
   return shape;
+}
+
+/**
+ * A packed tail's part of a frame shape (`shape` holds the fields before it; the tail starts at `at`, the fields' size,
+ * as encode and decode place it): the payload's length range, from the unpacked bytes the tail takes (its layout's
+ * range, or none to maxLength, either capped by maxLength) packed, plus its CRC; and, read with a layout, that
+ * layout's pinned bytes where packing keeps them whole: a nibble pair for each (both nibbles fixed), or the low seven
+ * bits of each 8to7 data byte (its top bit shares the group's high-bits byte).
+ * A `not` of the tail layout pins nothing here: no one packed byte holds the whole value.
+ */
+function packedShape(shape: FrameShape, at: number, p: PackedTail, endian: "le" | "be", layouts: Record<string, Layout>): void {
+  const crc = p.crc ? CRC_SEPTETS : 0;
+  // a missing or packed tail layout is refused at load: until then, any bytes up to maxLength
+  const t = p.layout !== undefined && has(layouts, p.layout) && !layouts[p.layout].packed ? frameShape(layouts[p.layout], endian) : undefined;
+  const fewest = Math.min(t?.min ?? 0, p.maxLength);
+  const most = Math.min(t?.max ?? Infinity, p.maxLength);
+  shape.min = at + packedSize(p, fewest) + crc;
+  shape.max = at + packedSize(p, most) + crc;
+  if (!t) return;
+  const pin = (i: number, y: number) => {
+    shape.is.set(i, y);
+    shape.tail.add(i);
+  };
+  for (const [o, x] of t.is) {
+    if (p.packing === "8to7") pin(at + 8 * Math.floor(o / 7) + 1 + (o % 7), x & 0x7f);
+    else splitNibbles(Uint8Array.of(x), nibbleOrder(p)).forEach((y, i) => pin(at + 2 * o + i, y));
+  }
+}
+
+/**
+ * Why no payload can fit both shapes, in words ("byte 4: 08 vs 01", "byte 4: 08 vs never 08", "length: 1 vs 2 or
+ * more", "byte 9: 01 vs 03 (packed tail)" where either pin comes from a packed tail), or undefined when one can.
+ * Lengths come first, then the lowest byte pinned apart.
+ */
+function shapesApart(a: FrameShape, b: FrameShape): string | undefined {
+  const span = (x: FrameShape) => (x.max === Infinity ? `${x.min} or more` : x.min === x.max ? `${x.min}` : `${x.min}..${x.max}`);
+  if (Math.max(a.min, b.min) > Math.min(a.max, b.max)) return `length: ${span(a)} vs ${span(b)}`;
+  const hex = (v: number) => v.toString(16).padStart(2, "0");
+  let at = Infinity;
+  let why = "";
+  const scan = (x: FrameShape, y: FrameShape, flip: boolean) => {
+    for (const [i, v] of x.is) {
+      if (i >= at) continue;
+      const w = y.is.get(i);
+      const [mine, theirs] = w !== undefined ? (w !== v ? [hex(v), hex(w)] : []) : y.not.get(i)?.includes(v) ? [hex(v), `never ${hex(v)}`] : [];
+      if (mine === undefined) continue;
+      at = i;
+      const tail = x.tail.has(i) || y.tail.has(i) ? " (packed tail)" : "";
+      why = `byte ${i}: ${flip ? `${theirs} vs ${mine}` : `${mine} vs ${theirs}`}${tail}`;
+    }
+  };
+  scan(a, b, false);
+  scan(b, a, true);
+  return at === Infinity ? undefined : why;
 }
 
 /** Whether one payload can fit both shapes: their lengths meet, and no byte is pinned apart. */
 function shapesMeet(a: FrameShape, b: FrameShape): boolean {
-  if (Math.max(a.min, b.min) > Math.min(a.max, b.max)) return false;
-  const apart = (x: FrameShape, y: FrameShape) =>
-    [...x.is].some(([at, v]) => (y.is.has(at) ? y.is.get(at) !== v : (y.not.get(at)?.includes(v) ?? false)));
-  return !apart(a, b) && !apart(b, a);
+  return shapesApart(a, b) === undefined;
+}
+
+export { cmdsOverlap };
+
+/** cmdsOverlap on cmds already split into their tokens. */
+function tokensOverlap(x: readonly string[], y: readonly string[]): boolean {
+  return x.length === y.length && tokensBegin(x, y);
 }
 
 interface Scope {
@@ -1835,7 +2742,7 @@ function checkView(v: View, cmdLength: { min: number; max: number }, scope: Scop
     const fields = fieldsOf(n);
     return fields && new Set(fields.map((f) => f.name));
   };
-  const placeholders = (n: string) => (has(v.messages, n) ? v.messages[n].cmd.split(" ").filter((t) => t.startsWith("{")).map((t) => t.slice(1, -1)) : []);
+  const placeholders = (n: string) => (has(v.messages, n) ? placeholdersOf(v.messages[n].cmd) : []);
   const fieldOf = (msg: string, field: string): Field | undefined => fieldsOf(msg)?.find((f) => f.name === field);
   // the pairing and write rules name fields: a typo there would silently switch a filter off
   const needField = (where: string, msg: string, field: string | undefined) => {
@@ -1876,6 +2783,39 @@ function checkView(v: View, cmdLength: { min: number; max: number }, scope: Scop
       }
     }
   }
+  out.push(...blockIssues(v, scope));
+  out.push(...probeIssues(v, layoutOf));
+  for (const [g, def] of Object.entries(v.settings?.groups ?? {})) {
+    if (!has(v.messages, def.read)) out.push(`settings group ${g}: read "${def.read}" is not a message`);
+    else needArgs(`settings group ${g}`, def.read, def.args);
+  }
+  for (const s of v.settings?.items ?? []) {
+    if (!v.settings || !has(v.settings.groups, s.group)) out.push(`setting ${s.id}: no group "${s.group}"`);
+    if (!has(v.messages, s.write.message)) out.push(`setting ${s.id}: write "${s.write.message}" is not a message`);
+    else {
+      needField(`setting ${s.id}`, s.write.message, "value");
+      needArgs(`setting ${s.id}`, s.write.message, s.write.args);
+    }
+  }
+  if (v.eq) {
+    if (!v.settings || !has(v.settings.groups, v.eq.group)) out.push(`eq: no settings group "${v.eq.group}"`);
+    for (const [w, fields] of [[v.eq.power.write, ["value"]], [v.eq.param.write, ["param", "value"]]] as const) {
+      if (!has(v.messages, w)) out.push(`eq: "${w}" is not a message`);
+      else {
+        for (const f of fields) needField("eq", w, f);
+        needArgs("eq", w, undefined);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The blocked-cmd scan of one view: a send or request on a blocked message's cmd whose payload can be the blocked
+ * one's bytes (and a block that names no message).
+ */
+function blockIssues(v: View, scope: Pick<Scope, "scan" | "blocks" | "scanAll" | "candidates">): string[] {
+  const out: string[] = [];
   // a block must not be bypassed by another name that sends the same bytes
   const isBlocked = new Set(v.blocked);
   for (const b of new Set([...scope.blocks, ...(scope.scanAll ?? [])])) if (!has(v.messages, b)) out.push(`blocked "${b}" is not a message`);
@@ -1884,12 +2824,14 @@ function checkView(v: View, cmdLength: { min: number; max: number }, scope: Scop
   const shapes = new Map<string, FrameShape | null>();
   const shapeOfMessage = (n: string): FrameShape | null => {
     if (!shapes.has(n)) {
-      const l = layoutOf(v.messages[n]);
-      shapes.set(n, l ? frameShape(l, v.endian) : null);
+      const l = messageLayout(v.messages[n], v.layouts);
+      shapes.set(n, l ? frameShape(l, v.endian, v.layouts) : null);
     }
     return shapes.get(n)!;
   };
   const canBe = (n: string, b: string) => {
+    // under another header (sysex-plain) its frame starts with other bytes
+    if (v.messages[n].header !== v.messages[b].header) return false;
     const [x, y] = [shapeOfMessage(n), shapeOfMessage(b)];
     return !x || !y || shapesMeet(x, y);
   };
@@ -1919,27 +2861,123 @@ function checkView(v: View, cmdLength: { min: number; max: number }, scope: Scop
     if (!has(v.messages, b)) continue;
     scanBlocks(scope.candidates ? scope.candidates(b) : Object.keys(v.messages), [b]);
   }
-  for (const [g, def] of Object.entries(v.settings?.groups ?? {})) {
-    if (!has(v.messages, def.read)) out.push(`settings group ${g}: read "${def.read}" is not a message`);
-    else needArgs(`settings group ${g}`, def.read, def.args);
+  return out;
+}
+
+// ---- first contact: safe reads and read-backs ----------------------------------------------------------------------
+
+/** A message and its payload layout, looked up by name in the map as one firmware sees it. */
+export interface MessageLookup {
+  message(name: string): Message | undefined;
+  /** the message's payload layout (`{fields: []}` without one), or undefined where the map lacks the layout */
+  payload(name: string): Layout | undefined;
+}
+
+/** A write's read-back, resolved: the read, the message that answers it, and the field pairs. */
+export interface ReadBackPair {
+  request: string;
+  reply: string;
+  /** the read's request field filled from the write's field */
+  inputs: { request: string; send: string }[];
+  /** the read's reply field that must equal the write's field */
+  compare: { reply: string; send: string }[];
+}
+
+/** A field the caller gives a value for: not padding, a const, a checksum or a copy of another field. */
+function carriesValue(f: Field): boolean {
+  if (f.type === "pad") return false;
+  if (f.type === "string") return true;
+  if (f.type === "bytes") return f.const === undefined;
+  return f.const === undefined && f.checksum === undefined && f.copyOf === undefined;
+}
+
+/** A field encode refuses to write without the caller's value: a scalar with no default (bytes and strings go empty). */
+function needsValue(f: Field): boolean {
+  return f.type !== "pad" && f.type !== "bytes" && f.type !== "string" && carriesValue(f) && f.default === undefined;
+}
+
+/** The `{arg}` placeholder names of a cmd template. */
+function placeholdersOf(cmd: string): string[] {
+  return cmd.split(" ").filter((t) => t.startsWith("{")).map((t) => t.slice(1, -1));
+}
+
+/**
+ * A write's `readBack` resolved against the map, with whatever keeps it from working: the read must be a safeRead
+ * request with a fixed cmd and one reply, every pair must name real fields, the write's values must fill every field
+ * the read needs, and the inputs and compared fields together must cover every value the write carries, so the write
+ * can be rebuilt from the read (the echo write) and nothing it sets goes unchecked.
+ */
+export function resolveReadBack(write: string, look: MessageLookup): { pair?: ReadBackPair; problems: string[] } {
+  const m = look.message(write);
+  const rb = m?.readBack;
+  if (!m || rb === undefined) return { problems: [] };
+  const where = `message ${write} readBack`;
+  const problems: string[] = [];
+  if (m.dir !== "send" && m.dir !== "request") problems.push(`${where}: only a write has a read-back, not a ${m.dir}`);
+  if (m.safeRead !== undefined) problems.push(`${where}: a safeRead request writes nothing to read back`);
+  if (rb === false) return { problems };
+  const request = typeof rb === "string" ? rb : rb.request;
+  const r = look.message(request);
+  if (!r) return { problems: [...problems, `${where}: "${request}" is not a message`] };
+  if (r.dir !== "request" || r.safeRead === undefined) problems.push(`${where}: "${request}" must be a safeRead request`);
+  if (r.cmd.includes("{")) problems.push(`${where}: "${request}" needs a fixed cmd`);
+  if (r.reply?.list) problems.push(`${where}: "${request}" is answered with a list, and a read-back needs one reply`);
+  const reply = r.reply?.message ?? request;
+  const [wl, rl, pl] = [look.payload(write), look.payload(request), look.message(reply) && look.payload(reply)];
+  // a missing message or layout is reported by the message checks
+  if (!wl || !rl || !pl) return { problems };
+  const fields = (l: Layout) => new Map(l.fields.filter((f) => f.type !== "pad").map((f) => [f.name, f]));
+  const [W, R, P] = [fields(wl), fields(rl), fields(pl)];
+  const inputs = typeof rb === "object" && rb.inputs ? rb.inputs : [...R].filter(([k, f]) => carriesValue(f) && W.has(k) && carriesValue(W.get(k)!)).map(([k]) => ({ request: k, send: k }));
+  const given = new Set(inputs.map((i) => i.send));
+  const compare =
+    typeof rb === "object" && rb.compare
+      ? rb.compare
+      : [...P].filter(([k, f]) => carriesValue(f) && W.has(k) && carriesValue(W.get(k)!) && !given.has(k)).map(([k]) => ({ reply: k, send: k }));
+  for (const i of inputs) {
+    if (!R.has(i.request)) problems.push(`${where}: "${request}" has no field "${i.request}"`);
+    if (!W.has(i.send)) problems.push(`${where}: "${write}" has no field "${i.send}"`);
   }
-  for (const s of v.settings?.items ?? []) {
-    if (!v.settings || !has(v.settings.groups, s.group)) out.push(`setting ${s.id}: no group "${s.group}"`);
-    if (!has(v.messages, s.write.message)) out.push(`setting ${s.id}: write "${s.write.message}" is not a message`);
-    else {
-      needField(`setting ${s.id}`, s.write.message, "value");
-      needArgs(`setting ${s.id}`, s.write.message, s.write.args);
-    }
+  for (const c of compare) {
+    if (!P.has(c.reply)) problems.push(`${where}: "${reply}" has no field "${c.reply}"`);
+    if (!W.has(c.send)) problems.push(`${where}: "${write}" has no field "${c.send}"`);
   }
-  if (v.eq) {
-    if (!v.settings || !has(v.settings.groups, v.eq.group)) out.push(`eq: no settings group "${v.eq.group}"`);
-    for (const [w, fields] of [[v.eq.power.write, ["value"]], [v.eq.param.write, ["param", "value"]]] as const) {
-      if (!has(v.messages, w)) out.push(`eq: "${w}" is not a message`);
-      else {
-        for (const f of fields) needField("eq", w, f);
-        needArgs("eq", w, undefined);
-      }
-    }
+  if (!compare.length) problems.push(`${where}: "${reply}" shares no field with "${write}", so there is nothing to compare`);
+  const filled = new Set(inputs.map((i) => i.request));
+  for (const [k, f] of R) if (needsValue(f) && !filled.has(k)) problems.push(`${where}: nothing of "${write}" fills "${request}" field "${k}"`);
+  const covered = new Set([...given, ...compare.map((c) => c.send)]);
+  for (const [k, f] of W) if (carriesValue(f) && !covered.has(k)) problems.push(`${where}: "${write}" field "${k}" is neither an input nor compared`);
+  return problems.length ? { problems } : { pair: { request, reply, inputs, compare }, problems };
+}
+
+/**
+ * A safeRead is a request the probe can send as the map gives it (a firmware may still block it): its placeholders
+ * and every field that needs a value filled by its own `fields` and `args`, which name nothing the request lacks.
+ * Read-backs are resolved as above.
+ */
+function probeIssues(v: View, layoutOf: (m: Message) => Layout | undefined): string[] {
+  const out: string[] = [];
+  const look: MessageLookup = {
+    message: (n) => (has(v.messages, n) ? v.messages[n] : undefined),
+    payload: (n) => (has(v.messages, n) ? layoutOf(v.messages[n]) : { fields: [] }),
+  };
+  for (const [n, m] of Object.entries(v.messages)) {
+    if (out.length >= MAX_ISSUES) break;
+    if (m.readBack !== undefined) out.push(...resolveReadBack(n, look).problems);
+    const s = m.safeRead;
+    if (s === undefined) continue;
+    const where = `message ${n} safeRead`;
+    if (m.dir !== "request") out.push(`${where}: only a request is a safe read, not a ${m.dir}`);
+    if (m.ack) out.push(`${where}: an acknowledged message is a write`);
+    const l = look.payload(n);
+    const fields = new Map((l?.fields ?? []).filter((f) => f.type !== "pad").map((f) => [f.name, f]));
+    const given = s === true ? {} : (s.fields ?? {});
+    const args = s === true ? {} : (s.args ?? {});
+    for (const k of Object.keys(given)) if (l && !fields.has(k)) out.push(`${where}: "${n}" has no field "${k}"`);
+    for (const [k, f] of fields) if (needsValue(f) && !has(given, k)) out.push(`${where}: no value for field "${k}"`);
+    const ph = placeholdersOf(m.cmd);
+    for (const a of ph) if (!has(args, a)) out.push(`${where}: no value for {${a}}`);
+    for (const a of Object.keys(args)) if (!ph.includes(a)) out.push(`${where}: "${n}" has no {${a}} in its cmd`);
   }
   return out;
 }
@@ -2100,6 +3138,8 @@ function checkLayout(where: string, l: Layout, enums: Record<string, unknown>): 
   if (l.minSize !== undefined && l.maxSize !== undefined && l.minSize > l.maxSize) out.push(`${where}: minSize > maxSize`);
   const fields = placed(l);
   for (const { f, at } of fields) out.push(...checkField(`${where}: field ${f.name}`, f, at, end, enums));
+  // an address field has no place, but its const, min, max and default still fit its type (a wrapped const moves it)
+  for (const f of l.fields.filter(isAddressField)) out.push(...checkField(`${where}: field ${f.name}`, f, 0, end, enums));
   const open = fields.find(({ f }) => f.type === "string" && f.open);
   if (open && fields.some(({ f, at }) => f !== open.f && at + extent(f) > open.at)) out.push(`${where}: open string ${open.f.name} must be the last field`);
   if (l.packed) out.push(...packedIssues(where, l, l.packed, open !== undefined));
@@ -2109,6 +3149,21 @@ function checkLayout(where: string, l: Layout, enums: Record<string, unknown>): 
     const scalar = t && t.type !== "bytes" && t.type !== "string" && t.type !== "pad";
     if (!t || !scalar || t.repeat || t.copyOf !== undefined || t === f) out.push(`${where}: field ${f.name}: copyOf "${f.copyOf}" is not a single scalar field`);
     if (f.const !== undefined || f.repeat || f.checksum) out.push(`${where}: field ${f.name}: copyOf goes with no const, repeat or checksum`);
+  }
+  for (const f of l.fields) {
+    if (f.type === "bytes" || f.type === "string" || f.type === "pad" || !f.enumBy) continue;
+    const at = `${where}: field ${f.name}: enumBy`;
+    if (f.enum !== undefined) out.push(`${at} goes without enum`);
+    // a repeat's values are read and taken as numbers only: each element would need a selector of its own
+    if (f.repeat) out.push(`${at} goes on a single field, not a repeat`);
+    const by = l.fields.find((x) => x.name === f.enumBy!.field);
+    const sel = by && by.type !== "bytes" && by.type !== "string" && by.type !== "pad" ? by : undefined;
+    if (!sel || sel === f || sel.repeat || sel.enum === undefined) out.push(`${at}: "${f.enumBy.field}" is not a single field of this payload that reads an enum`);
+    else if (has(enums, sel.enum)) {
+      const keys = enums[sel.enum] as Record<string, number>;
+      for (const k of Object.keys(f.enumBy.enums)) if (!has(keys, k)) out.push(`${at}: "${k}" is not a key of enum ${sel.enum}`);
+    }
+    for (const e of new Set(Object.values(f.enumBy.enums))) if (!has(enums, e)) out.push(`${at}: unknown enum "${e}"`);
   }
   // a checksum may not sum another checksum's bytes: the result would depend on the order they are written
   const sums = fields.filter(({ f }) => f.type !== "bytes" && f.type !== "string" && f.type !== "pad" && f.checksum);
@@ -2226,10 +3281,13 @@ export function elementOffsets(f: Field): number[] {
   return out;
 }
 
-/** Field offsets resolved: a field without an offset starts right after the furthest byte any earlier field reaches. */
+/**
+ * Field offsets resolved: a field without an offset starts right after the furthest byte any earlier field reaches. An
+ * address field takes no payload bytes, so it has no place.
+ */
 function placed(l: Layout): { f: Field; at: number }[] {
   let end = 0;
-  return l.fields.map((f) => {
+  return l.fields.filter((f) => !isAddressField(f)).map((f) => {
     const at = f.offset ?? end;
     end = Math.max(end, at + extent(f));
     return { f, at };
@@ -2246,6 +3304,163 @@ function layoutEnd(l: Layout): number {
 
 export function layoutSize(l: Layout): number {
   return layoutEnd(l);
+}
+
+// ---- address fields (roland-address) ---------------------------------------------------------------------------
+
+/** A field that moves its message's address instead of taking payload bytes. */
+export type AddressField = ScalarField & { address: NonNullable<ScalarField["address"]> };
+
+export const isAddressField = (f: Field): f is AddressField => f.type !== "bytes" && f.type !== "string" && f.type !== "pad" && f.address !== undefined;
+
+/** An address (7-bit digits, most significant first) as a number; throws on a digit with the high bit set. */
+export function addressValue(address: ArrayLike<number>): number {
+  let n = 0;
+  for (let i = 0; i < address.length; i++) {
+    if (address[i] > 0x7f) throw new ProtocolError(`address byte ${address[i]} is not 7-bit`);
+    n = n * 128 + address[i];
+  }
+  return n;
+}
+
+/** A number as an address of `width` 7-bit digits, most significant first; throws when it does not fit. */
+export function addressBytes(n: number, width: number): Uint8Array {
+  if (!Number.isSafeInteger(n) || n < 0 || n >= 128 ** width) throw new ProtocolError(`address ${n} does not fit ${width} 7-bit bytes`);
+  const out = new Uint8Array(width);
+  for (let i = width - 1; i >= 0; i--, n = Math.floor(n / 128)) out[i] = n % 128;
+  return out;
+}
+
+const addressOfHex = (h: string): number => addressValue(parseHex(h));
+
+/** The wire value an address field takes for what a caller gives (an enum key, a number, nothing for its default). */
+function addressWire(f: AddressField, x: unknown, ctx: CodecContext, where: string): number {
+  const b = new Uint8Array(8);
+  const v = new DataView(b.buffer);
+  const le = (f.endian ?? ctx.endian) === "le";
+  writeElement(f, v, b, 0, x, ctx, where);
+  return getScalar(f, v, 0, le);
+}
+
+/** What an address field's wire value reads as (an enum key where the enum names it, else the number). */
+function addressRead(f: AddressField, wire: number, ctx: CodecContext, where: string): unknown {
+  const b = new Uint8Array(8);
+  const v = new DataView(b.buffer);
+  const le = (f.endian ?? ctx.endian) === "le";
+  putScalar(f, v, 0, le, wire);
+  return readElement(f, v, b, 0, ctx, where);
+}
+
+/** How far an address field at a wire value moves the address; a table that has no entry for it refuses. */
+function addressStep(f: AddressField, wire: number, ctx: CodecContext, tables: Protocol["addresses"], where: string): number {
+  if (f.address.stride !== undefined) return wire * addressOfHex(f.address.stride);
+  const table = tables && has(tables, f.address.table!) ? tables[f.address.table!] : {};
+  const e = enumOf(ctx, f);
+  // the enum names values before scale and bias, as readElement reads them
+  const n = (wire - (f.bias ?? 0)) / (f.scale ?? 1);
+  const key = e && Object.keys(e).find((k) => e[k] === n);
+  if (key === undefined || !has(table, key)) throw new SafetyError(`${where}: the device map gives no address for ${f.name} ${key ?? wire}; nothing was sent`);
+  return addressOfHex(table[key]);
+}
+
+/** An address field's choices: (wire value, offset) pairs, or a run of wire values lo..hi each `stride` apart. */
+type AddressTerm = { options: [number, number][] } | { lo: number; hi: number; stride: number };
+
+/** The wire values an address field may take, as the search walks them; one the field refuses is left out. */
+function addressTerm(f: AddressField, ctx: CodecContext, tables: Protocol["addresses"]): AddressTerm {
+  const listed = (xs: unknown[]): AddressTerm => {
+    const options: [number, number][] = [];
+    for (const x of xs) {
+      try {
+        const w = addressWire(f, x, ctx, f.name);
+        options.push([w, addressStep(f, w, ctx, tables, f.name)]);
+      } catch {
+        // a value the field or its table refuses is never sent
+      }
+    }
+    return { options };
+  };
+  if (f.address.table !== undefined) return listed(Object.keys(tables?.[f.address.table] ?? {}));
+  if (f.const !== undefined) return { options: [[f.const, f.const * addressOfHex(f.address.stride!)]] };
+  if (f.allowed) return listed(f.allowed);
+  const [typeLo, typeHi] = INT_RANGE[f.type as "u8" | "u16" | "u32"] ?? [0, 0];
+  const wire = (x: number) => Math.round(x * (f.scale ?? 1) + (f.bias ?? 0));
+  const lo = Math.max(typeLo, f.min === undefined ? typeLo : wire(f.min));
+  const hi = Math.min(typeHi, f.max === undefined ? typeHi : wire(f.max));
+  return { lo, hi, stride: addressOfHex(f.address.stride!) };
+}
+
+const termMin = (t: AddressTerm) => ("options" in t ? Math.min(...t.options.map(([, o]) => o)) : t.lo * t.stride);
+const termMax = (t: AddressTerm) => ("options" in t ? Math.max(...t.options.map(([, o]) => o)) : t.hi * t.stride);
+
+/**
+ * Whether no two sets of values reach the same address: sufficient, as for the digits of a number, when each term's
+ * smallest step between its own offsets is wider than every term with smaller steps can spread. A table with two
+ * keys at one offset fails it, as does a parameter range that runs into the next block's area.
+ */
+function addressesApart(terms: AddressTerm[]): boolean {
+  const stepOf = (t: AddressTerm): number => {
+    if (!("options" in t)) return t.hi > t.lo ? t.stride : Infinity;
+    const o = [...new Set(t.options.map(([, x]) => x))].sort((a, b) => a - b);
+    if (o.length < t.options.length) return 0;
+    let step = Infinity;
+    for (let i = 1; i < o.length; i++) step = Math.min(step, o[i] - o[i - 1]);
+    return step;
+  };
+  const order = terms.map((t) => ({ step: stepOf(t), spread: termMax(t) - termMin(t) })).sort((a, b) => b.step - a.step);
+  let below = 0;
+  for (let k = order.length - 1; k >= 0; k--) {
+    if (order[k].step === 0 || (order[k].spread > 0 && order[k].step <= below)) return false;
+    below += order[k].spread;
+  }
+  return true;
+}
+
+/** The search gave up before it could answer. */
+class AddressSearchTooLong extends Error {}
+
+/**
+ * Wire values for the terms (in their order) whose offsets sum into lo..hi: up to `limit` of them. Runs are walked
+ * widest stride first, each narrowed to what the rest can still reach, so nested areas (a block, then a parameter in
+ * it) take a step or two per field. Throws AddressSearchTooLong past MAX_ADDRESS_STEPS.
+ */
+function searchAddress(terms: AddressTerm[], lo: number, hi: number, limit: number): number[][] {
+  const order = terms.map((t, i) => ({ t, i })).sort((a, b) => ("options" in a.t ? 0 : 1) - ("options" in b.t ? 0 : 1) || ("stride" in b.t ? b.t.stride : 0) - ("stride" in a.t ? a.t.stride : 0));
+  const restMin: number[] = [0];
+  const restMax: number[] = [0];
+  for (let k = order.length - 1; k >= 0; k--) {
+    restMin.unshift(restMin[0] + termMin(order[k].t));
+    restMax.unshift(restMax[0] + termMax(order[k].t));
+  }
+  const found: number[][] = [];
+  const chosen: number[] = new Array(terms.length);
+  let steps = 0;
+  const go = (k: number, from: number, to: number): void => {
+    if (++steps > MAX_ADDRESS_STEPS) throw new AddressSearchTooLong();
+    if (k === order.length) {
+      if (from <= 0 && 0 <= to) found.push([...chosen]);
+      return;
+    }
+    const { t, i } = order[k];
+    const [rMin, rMax] = [restMin[k + 1], restMax[k + 1]];
+    if ("options" in t) {
+      for (const [w, o] of t.options) {
+        if (found.length >= limit) return;
+        if (o + rMin > to || o + rMax < from) continue;
+        chosen[i] = w;
+        go(k + 1, from - o, to - o);
+      }
+      return;
+    }
+    const first = Math.max(t.lo, Math.ceil((from - rMax) / t.stride));
+    const last = Math.min(t.hi, Math.floor((to - rMin) / t.stride));
+    for (let w = first; w <= last && found.length < limit; w++) {
+      chosen[i] = w;
+      go(k + 1, from - w * t.stride, to - w * t.stride);
+    }
+  };
+  if (terms.every((t) => !("options" in t) || t.options.length)) go(0, lo, hi);
+  return found;
 }
 
 export function writeScalar(v: DataView, at: number, type: ScalarType, le: boolean, x: number): void {
@@ -2436,7 +3651,11 @@ function enumOf(ctx: CodecContext, f: ScalarField): Record<string, number> | und
 function enumValue(ctx: CodecContext, f: ScalarField, key: string, where: string): number {
   const e = enumOf(ctx, f);
   if (!e) throw new ProtocolError(`${where}: expected a number`);
-  if (!has(e, key)) throw new ProtocolError(`${where}: "${key}" is not one of ${Object.keys(e).join(", ")}`);
+  if (!has(e, key)) {
+    // an enum left empty is one the map can't give for this firmware (see ProtocolCodec.enumsInDoubt): say so, not "one of"
+    const keys = Object.keys(e);
+    throw new ProtocolError(keys.length ? `${where}: "${key}" is not one of ${keys.join(", ")}` : `${where}: "${key}" can't be sent: the map has no ${f.enum} list for this firmware`);
+  }
   return e[key];
 }
 
@@ -2691,6 +3910,9 @@ export interface Encoded {
   /** Uncompressed payload; the framing engine compresses and frames it. */
   payload: Uint8Array;
   dir: Message["dir"];
+  /** The wire values of the message's address fields (roland-address), which moved its cmd's address: its reply's
+   * address moves with them, and its address fields read as them. */
+  address?: Record<string, number>;
   /** sysex-plain: the entry of transport.frame.headers it is sent under; omitted: the device's header. */
   header?: string;
 }
@@ -2741,13 +3963,22 @@ const SIDE_DIRS: Record<Side, readonly Message["dir"][]> = { device: ["reply", "
 export class ProtocolCodec {
   readonly protocol: Protocol;
   readonly firmware: string | undefined;
-  /** True when the map lists this firmware; false means the base protocol, unverified for it. */
+  /** True when the map lists this firmware, by its own key or in a range; false means the base protocol, unverified for it. */
   readonly firmwareListed: boolean;
+  /** The key of the firmware entry this firmware reads (its own, or the one whose range holds it), or undefined. */
+  readonly firmwareEntry: string | undefined;
+  /**
+   * Enums that some firmware entry replaces, on a firmware the map does not list: the map can't say which list this
+   * firmware has, so they read as empty (a value stays a number, and no key is sent) rather than as the base's guess.
+   */
+  readonly enumsInDoubt: readonly string[];
   private readonly messages: Record<string, Message>;
   private readonly layouts: Record<string, Layout>;
   private readonly blocked: Set<string>;
   /** Frame shapes by message name, filled on first use. */
   private readonly shapes = new Map<string, FrameShape>();
+  /** Each message's address terms, worked out once: messagesForCmd asks every message for every incoming frame. */
+  private readonly terms = new Map<string, AddressTerm[]>();
   readonly enums: Record<string, Record<string, number>>;
   readonly constants: Record<string, number>;
   readonly timing: Transport["timing"];
@@ -2759,22 +3990,47 @@ export class ProtocolCodec {
   readonly audio: Audio | undefined;
   readonly host: Host | undefined;
   readonly scratch: Protocol["scratch"];
+  /** the mode this view is for, where the map has modes; undefined for the map's own entries */
+  readonly mode: string | undefined;
+  /** the block parameter tables as this mode sees them */
+  readonly parameters: Protocol["parameters"];
+  /** this mode's stand-ins */
+  private readonly use: ModeUse;
   /** this unit's checks: the choices it has settled, and the entries it has contradicted */
   private readonly checks: UnitChecks | undefined;
   /** settled choices: the checks' own, so a choice the unit settles here is kept for it */
   private readonly pins: Record<string, string>;
 
-  constructor(protocol: Protocol, firmware?: string, checks?: UnitChecks) {
+  /**
+   * `mode` is the mode the unit reports, where the map has modes (a key of its mode enum): each name the mode stands
+   * an entry in for reads as that entry, and one it maps to null is gone. Without it, the map's own entries.
+   */
+  constructor(protocol: Protocol, firmware?: string, checks?: UnitChecks, mode?: string) {
     this.protocol = protocol;
     this.checks = checks;
     this.pins = checks?.pins ?? {};
     this.firmware = firmware;
-    this.firmwareListed = firmware !== undefined && protocol.firmwares !== undefined && has(protocol.firmwares, firmware);
-    const d = this.firmwareListed ? protocol.firmwares![firmware!] : {};
-    this.messages = { ...protocol.messages, ...d.messages };
-    this.layouts = { ...protocol.layouts, ...d.layouts };
-    this.enums = { ...protocol.enums };
-    this.constants = { ...protocol.constants, ...d.constants };
+    this.firmwareEntry = firmwareEntryKey(protocol.firmwares, firmware);
+    this.firmwareListed = this.firmwareEntry !== undefined;
+    const d = this.firmwareListed ? protocol.firmwares![this.firmwareEntry!] : {};
+    // a firmware the map does not list: an enum some listed firmware replaces may differ on it too, so it is not guessed
+    // (only the base's own enums: one a firmware adds is named by that firmware's own entries alone)
+    const doubt =
+      firmware === undefined || this.firmwareListed
+        ? []
+        : [...new Set(Object.values(protocol.firmwares ?? {}).flatMap((x) => Object.keys(x.enums ?? {})))].filter((e) => has(protocol.enums ?? {}, e));
+    this.enumsInDoubt = doubt;
+    if (mode !== undefined && !modeNames(protocol).includes(mode)) throw new ProtocolError(`the device map has no mode "${mode}"`);
+    this.mode = mode;
+    const use = (this.use = mode === undefined ? {} : modeUse(protocol, mode));
+    this.messages = inMode({ ...protocol.messages, ...d.messages }, use.messages);
+    this.layouts = inMode({ ...protocol.layouts, ...d.layouts }, use.layouts);
+    // (a firmware may only add blocks that can't be bypassed, so in doubt every block some firmware keeps on stays on)
+    const inDoubt = (e: string) =>
+      e === "noBypass" ? Object.assign({}, protocol.enums?.noBypass, ...Object.values(protocol.firmwares ?? {}).map((x) => x.enums?.noBypass)) : {};
+    this.enums = inMode({ ...protocol.enums, ...d.enums, ...Object.fromEntries(doubt.map((e) => [e, inDoubt(e)])) }, use.enums);
+    this.constants = inMode({ ...protocol.constants, ...d.constants }, use.constants);
+    this.parameters = protocol.parameters && { ...protocol.parameters, groups: groupsInMode(protocol, use) };
     this.timing = protocol.transport.timing;
     this.settings = protocol.settings;
     this.eq = protocol.eq;
@@ -2783,7 +4039,7 @@ export class ProtocolCodec {
     this.host = protocol.host;
     this.scratch = protocol.scratch;
     const base = protocol.safety;
-    const extra = this.firmwareListed ? protocol.firmwares![firmware!].safety : undefined;
+    const extra = d.safety;
     this.safety = base && {
       ...base,
       modelChange: {
@@ -2794,6 +4050,39 @@ export class ProtocolCodec {
     };
     // a firmware can only add to the blocked list, never lift a base block
     this.blocked = new Set([...(protocol.blocked ?? []), ...(d.blocked ?? [])]);
+    // a name a mode stands a blocked message in for is blocked in that mode: the block is on the bytes
+    for (const [n, sub] of Object.entries(use.messages ?? {})) if (sub !== null && this.blocked.has(sub)) this.blocked.add(n);
+  }
+
+  /**
+   * The map-check entry (map-checks.ts) for one the driver names: in a mode, the entry the mode stands in for
+   * it (`getPresetBass` for `getPreset`, `setBypassBass/amp1` for `setBypass/amp1`), and a parameter of a stand-in
+   * group named with that group (`param/amp1/12/ampBass`), so what the unit shows in one mode is never held against
+   * another's entries. In a mode that stands in layouts or enums, a message entry is tagged with the mode
+   * (`getPreset@bass`): the same message reads otherwise there.
+   */
+  entry(e: string): string {
+    const [kind, ...rest] = e.split("/");
+    if (kind === "choice") return e;
+    if (kind === "param") {
+      const subs = this.use.groups ?? {};
+      const g = Object.keys(this.parameters?.groups ?? {}).find((n) => {
+        const x = this.parameters!.groups[n];
+        return x.blocks?.includes(rest[0]) || x.types?.includes(rest[0]);
+      });
+      const sub = g !== undefined && has(subs, g) ? subs[g] : null;
+      return sub === null || rest.length !== 2 ? e : `${e}/${sub}`;
+    }
+    // a mode that stands in layouts or enums may read a message otherwise than the map read without a mode does:
+    // its entries are tagged with the mode, and fingerprinted as that mode reads them
+    const swaps = Object.keys(this.use.layouts ?? {}).length + Object.keys(this.use.enums ?? {}).length > 0;
+    return [`${this.mapMessage(kind)}${swaps ? `@${this.mode}` : ""}`, ...rest].join("/");
+  }
+
+  /** The map's own message a driver name reads as here: in a mode, the one the mode stands in for it. */
+  mapMessage(name: string): string {
+    const subs = this.use.messages ?? {};
+    return (has(subs, name) ? subs[name] : null) ?? name;
   }
 
   private get ctx(): CodecContext {
@@ -2819,6 +4108,73 @@ export class ProtocolCodec {
     return p === undefined ? { fields: [] } : typeof p === "string" ? this.layout(p) : p;
   }
 
+  /** A message's address fields (roland-address): each moves the message's address instead of taking payload bytes. */
+  addressFields(name: string): AddressField[] {
+    return this.payloadLayout(name).fields.filter(isAddressField);
+  }
+
+  /** The wire values of a message's address fields for the values a caller gives (enum keys, numbers, defaults). */
+  private addressWires(name: string, values: Values): Record<string, number> {
+    return Object.fromEntries(this.addressFields(name).map((f) => [f.name, addressWire(f, values[f.name], this.ctx, `${name}.${f.name}`)]));
+  }
+
+  /** The cmd with its address moved by the address fields' wire values (a message without any keeps the map's). */
+  private moved(name: string, wires: Record<string, number>, args: Record<string, number> = {}): Uint8Array {
+    const cmd = this.cmd(name, args);
+    const fields = this.addressFields(name);
+    const t = this.protocol.transport;
+    if (!fields.length || t.framing !== "roland-address") return cmd;
+    const at = t.inner.cmdLength - t.inner.addressBytes;
+    let a = addressValue(cmd.subarray(at));
+    for (const f of fields) {
+      if (!has(wires, f.name)) throw new ProtocolError(`${name}: no value for its address field ${f.name}`);
+      a += addressStep(f, wires[f.name], this.ctx, this.protocol.addresses, name);
+    }
+    cmd.set(addressBytes(a, t.inner.addressBytes), at);
+    return cmd;
+  }
+
+  /** The cmd a message goes with for these values: the map's, its address moved by the message's address fields. */
+  cmdFor(name: string, values: Values = {}, args: Record<string, number> = {}): Uint8Array {
+    return this.moved(name, this.addressWires(name, values), args);
+  }
+
+  /** The cmd that answers a sent request: its reply message's, the address moved as the request's was. */
+  replyCmd(sent: Encoded): Uint8Array {
+    return this.moved(this.replyName(sent.name), sent.address ?? {});
+  }
+
+  /**
+   * The wire values of a message's address fields that move its address to the one `cmd` names, or undefined when no
+   * values reach it, more than one set does (the map can't tell them apart), the command bytes differ, or the search
+   * gives up. A message without address fields: {} for its own cmd.
+   */
+  addressOf(name: string, cmd: Uint8Array): Record<string, number> | undefined {
+    const fields = this.addressFields(name);
+    const t = this.protocol.transport;
+    const base = this.message(name).cmd.split(" ");
+    if (!fields.length || t.framing !== "roland-address") {
+      return base.length === cmd.length && base.every((x, i) => x.startsWith("{") || parseInt(x, 16) === cmd[i]) ? {} : undefined;
+    }
+    const at = t.inner.cmdLength - t.inner.addressBytes;
+    if (cmd.length !== base.length || base.slice(0, at).some((x, i) => parseInt(x, 16) !== cmd[i])) return undefined;
+    const target = addressValue(cmd.subarray(at)) - addressValue(parseHex(base.slice(at).join(" ")));
+    let found: number[][];
+    try {
+      found = searchAddress(this.termsOf(name), target, target, 2);
+    } catch (e) {
+      if (e instanceof AddressSearchTooLong) return undefined;
+      throw e;
+    }
+    return found.length === 1 ? Object.fromEntries(fields.map((f, i) => [f.name, found[0][i]])) : undefined;
+  }
+
+  /** What a message's address fields read as at these wire values (enum keys where named); `raw` keeps the numbers. */
+  private addressValues(name: string, wires: Record<string, number>, raw = false): Values {
+    const ctx = raw ? { ...this.ctx, raw: true } : this.ctx;
+    return Object.fromEntries(this.addressFields(name).filter((f) => has(wires, f.name)).map((f) => [f.name, addressRead(f, wires[f.name], ctx, `${name}.${f.name}`)]));
+  }
+
   /** The cmd bytes, with `{arg}` placeholders filled. */
   cmd(name: string, args: Record<string, number> = {}): Uint8Array {
     const m = this.message(name);
@@ -2841,24 +4197,102 @@ export class ProtocolCodec {
       throw new BlockedMessageError(`the device map blocks "${name}" on firmware ${this.firmware ?? "(any)"}`);
     }
     if (m.dir === "reply" || m.dir === "notify") throw new ProtocolError(`"${name}" comes from the device; it is not sent`);
-    const out: Encoded = { name, cmd: this.cmd(name, args), payload: this.encodeChoosing(this.payloadLayout(name), fields, name, base), dir: m.dir };
+    fields = this.writeEnumsBy(this.payloadLayout(name), fields, name);
+    const wires = this.addressWires(name, fields);
+    const out: Encoded = { name, cmd: this.moved(name, wires, args), payload: this.encodeChoosing(this.payloadLayout(name), fields, name, base), dir: m.dir };
+    if (Object.keys(wires).length) out.address = wires;
     if (m.header !== undefined) out.header = m.header;
-    noteCodecUse(this.protocol, "encode", name);
+    noteCodecUse(this.protocol, "encode", this.mapMessage(name));
     return out;
   }
 
-  /** A reply's or notification's payload as the device sends it, for a simulated device or a test. */
+  /** A reply's or notification's payload as the device sends it, for a simulated device or a test. Address fields take no payload bytes: cmdFor() moves the cmd by them. */
   encodeFromDevice(name: string, fields: Values = {}): Uint8Array {
     const m = this.message(name);
     if (m.dir !== "reply" && m.dir !== "notify") throw new ProtocolError(`"${name}" is sent to the device; encode() builds it`);
-    const out = this.encodeChoosing(this.payloadLayout(name), fields, name);
-    noteCodecUse(this.protocol, "encode", name);
+    const l = this.payloadLayout(name);
+    const out = this.encodeChoosing(l, this.writeEnumsBy(l, fields, name), name);
+    noteCodecUse(this.protocol, "encode", this.mapMessage(name));
     return out;
   }
 
-  decode(name: string, payload: Uint8Array): Values {
-    const out = this.decodeChoosing(this.payloadLayout(name), payload, name);
-    noteCodecUse(this.protocol, "decode", name);
+  /**
+   * Decode a message's payload. With `cmd` (the message's own, as it came), its address fields are read from the
+   * address there; a cmd they can't reach is refused. Without it, address fields are left out.
+   */
+  decode(name: string, payload: Uint8Array, cmd?: Uint8Array): Values {
+    const l = this.payloadLayout(name);
+    const values = this.decodeChoosing(l, payload, name);
+    let out = values;
+    if (cmd !== undefined && this.addressFields(name).length) {
+      const wires = this.addressOf(name, cmd);
+      if (!wires) throw new ProtocolError(`${name}: its address fields reach no single value set at ${hexOf(cmd)}`);
+      out = { ...values, ...this.addressValues(name, wires) };
+    }
+    // noted once the whole message reads, address included: a refused cmd is no decode
+    noteCodecUse(this.protocol, "decode", this.mapMessage(name));
+    return this.readEnumsBy(l, out);
+  }
+
+  /**
+   * Decode the answer to a sent request: with the pieces' `layout` for an answer joined from them, else as the reply
+   * message; either way the reply's address fields read as the request's (the answer came at its moved address).
+   */
+  decodeReply(sent: Encoded, payload: Uint8Array): Values {
+    const layout = this.pieces(sent.name)?.layout;
+    const reply = this.replyName(sent.name);
+    const read = layout === undefined ? this.decode(reply, payload) : this.decodeLayout(layout, payload);
+    // an enumBy field may be chosen by an address field, known only once the request's address values are in
+    return this.readEnumsBy(layout === undefined ? this.payloadLayout(reply) : this.layout(layout), { ...read, ...this.addressValues(reply, sent.address ?? {}) });
+  }
+
+  /**
+   * The enum a field of a message's payload or a layout reads under these values: its own `enum`, or the one its
+   * `enumBy` picks for the other field's value (undefined where it picks none).
+   */
+  fieldEnum(layoutOrMessage: string, field: string, values: Values = {}): string | undefined {
+    const l = has(this.layouts, layoutOrMessage) ? this.layouts[layoutOrMessage] : this.payloadLayout(layoutOrMessage);
+    const f = this.field(layoutOrMessage, field);
+    return f.type === "bytes" || f.type === "string" || f.type === "pad" ? undefined : this.chosenEnum(l, f, values);
+  }
+
+  private chosenEnum(l: Layout, f: ScalarField, values: Values): string | undefined {
+    if (!f.enumBy) return f.enum;
+    const sel = l.fields.find((x) => x.name === f.enumBy!.field);
+    let v = values[f.enumBy.field];
+    if (typeof v === "number" && sel && "enum" in sel && sel.enum !== undefined) v = this.enumKey(sel.enum, v) ?? v;
+    return typeof v === "string" && has(f.enumBy.enums, v) ? f.enumBy.enums[v] : undefined;
+  }
+
+  /** The layout's enumBy fields, each read as a key of the enum chosen for it; a number that enum lacks stays one. */
+  private readEnumsBy(l: Layout, values: Values): Values {
+    let out = values;
+    for (const f of l.fields) {
+      if (f.type === "bytes" || f.type === "string" || f.type === "pad" || !f.enumBy || typeof values[f.name] !== "number") continue;
+      const e = this.chosenEnum(l, f, values);
+      const k = e === undefined ? undefined : this.enumKey(e, values[f.name] as number);
+      if (k !== undefined) out = { ...out, [f.name]: k };
+    }
+    return out;
+  }
+
+  /** The layout's enumBy fields given as keys, as their numbers; a key the chosen enum lacks is refused. */
+  private writeEnumsBy(l: Layout, values: Values, where: string): Values {
+    let out = values;
+    for (const f of l.fields) {
+      if (f.type === "bytes" || f.type === "string" || f.type === "pad" || !f.enumBy || typeof values[f.name] !== "string") continue;
+      const v = values[f.name] as string;
+      const e = this.chosenEnum(l, f, values);
+      if (e === undefined || !has(this.enums, e) || !has(this.enums[e], v)) {
+        // an enum left empty is one the map can't give for this firmware (see enumsInDoubt): say so, not "one of"
+        if (e !== undefined && has(this.enums, e) && !Object.keys(this.enums[e]).length) {
+          throw new ProtocolError(`${where}.${f.name}: "${v}" can't be sent: the map has no ${e} list for this firmware`);
+        }
+        const known = e !== undefined && has(this.enums, e) ? `one of ${Object.keys(this.enums[e]).join(", ")}` : `named for this ${f.enumBy.field}`;
+        throw new ProtocolError(`${where}.${f.name}: "${v}" is not ${known}`);
+      }
+      out = { ...out, [f.name]: this.enums[e][v] };
+    }
     return out;
   }
 
@@ -2890,6 +4324,15 @@ export class ProtocolCodec {
   private open(l: Layout): string[] {
     const choices = this.protocol.choices ?? {};
     return [...new Set(choiceFields(l).map((f) => f.choice))].filter((c) => !(has(this.pins, c) && has(choices[c].options, this.pins[c])));
+  }
+
+  /**
+   * Refuses a message whose payload names a choice this unit has not settled, even where this value encodes the same
+   * every way: an echo of it would read back right under either option, so it proves nothing about the choice.
+   */
+  refuseOpenChoices(name: string): void {
+    const open = this.open(this.payloadLayout(name));
+    if (open.length) throw new ChoiceOpenError(`Patchsprite can't check ${name} on this unit yet: ${this.doubt(open)}`, open);
   }
 
   /** What the player sees about open choices: what is in doubt, and how to settle it. */
@@ -3019,16 +4462,16 @@ export class ProtocolCodec {
     } catch {
       return null;
     }
-    if (note) noteCodecUse(this.protocol, "decode", name);
+    if (note) noteCodecUse(this.protocol, "decode", this.mapMessage(name));
     return out;
   }
 
   encodeLayout(name: string, values: Values, base?: Uint8Array): Uint8Array {
-    return this.encodeChoosing(this.layout(name), values, name, base);
+    return this.encodeChoosing(this.layout(name), this.writeEnumsBy(this.layout(name), values, name), name, base);
   }
 
   decodeLayout(name: string, bytes: Uint8Array): Values {
-    return this.decodeChoosing(this.layout(name), bytes, name);
+    return this.readEnumsBy(this.layout(name), this.decodeChoosing(this.layout(name), bytes, name));
   }
 
   offset(layout: string, field: string, ...index: number[]): number {
@@ -3038,6 +4481,16 @@ export class ProtocolCodec {
   /** The bytes a layout field covers, or the part of it under leading indexes. */
   span(layout: string, field: string, ...prefix: number[]): [number, number] {
     return fieldSpan(this.layout(layout), field, ...prefix);
+  }
+
+  /**
+   * Why a driver's needs can fail on this firmware beyond what the map lacks: the lists it can't give a firmware it does
+   * not cover, said so the player's refusal points at the map's firmwares, not a missing entry. Empty when none.
+   */
+  uncoveredNote(): string {
+    const e = this.enumsInDoubt;
+    if (!e.length) return "";
+    return ` (the map has no entry or range for firmware ${this.firmware}, and its firmwares change the ${e.join(", ")} list${e.length > 1 ? "s" : ""}, so it can't say which this firmware has)`;
   }
 
   /** The keys of an enum, in the map's order. */
@@ -3055,6 +4508,11 @@ export class ProtocolCodec {
 
   hasMessage(name: string): boolean {
     return has(this.messages, name);
+  }
+
+  /** Every message name on this firmware, in the map's order (the base's, then the firmware's own additions). */
+  messageNames(): string[] {
+    return Object.keys(this.messages);
   }
 
   hasLayout(name: string): boolean {
@@ -3177,10 +4635,14 @@ export class ProtocolCodec {
     // a request with no reply rule is answered by the same message, unfiltered
     const r = m.reply ?? (m.dir === "request" ? {} : undefined);
     if (!r) throw new ProtocolError(`"${sent.name}" expects no reply`);
-    const got = this.decodeRaw(r.message ?? sent.name, reply);
-    if (!got || !r.echo?.length) return got;
-    const asked = this.decodeRaw(sent.name, sent.payload, false);
-    return asked !== null && r.echo.every((e) => sameValue(got[e.reply], asked[e.request])) ? got : null;
+    const read = this.decodeRaw(r.message ?? sent.name, reply);
+    if (!read || !r.echo?.length) return read;
+    // address fields are the request's on both sides: the reply's address moved with it
+    const got = { ...read, ...this.addressValues(r.message ?? sent.name, sent.address ?? {}, true) };
+    const decoded = this.decodeRaw(sent.name, sent.payload, false);
+    if (decoded === null) return null;
+    const asked = { ...decoded, ...sent.address };
+    return r.echo.every((e) => sameValue(got[e.reply], asked[e.request])) ? read : null;
   }
 
   /** How a request's answer comes in pieces (its reply rule's `pieces`), or undefined when it comes in one message. */
@@ -3192,12 +4654,6 @@ export class ProtocolCodec {
   private answerLayout(request: string): Layout {
     const layout = this.pieces(request)?.layout;
     return layout === undefined ? this.payloadLayout(this.replyName(request)) : this.layout(layout);
-  }
-
-  /** A request's answer read: with the reply message's layout, or the pieces' `layout` for an answer joined from them. */
-  decodeAnswer(request: string, bytes: Uint8Array): Values {
-    const layout = this.pieces(request)?.layout;
-    return layout === undefined ? this.decode(this.replyName(request), bytes) : this.decodeLayout(layout, bytes);
   }
 
   /**
@@ -3257,10 +4713,15 @@ export class ProtocolCodec {
     return { answers: sameCmd && sameId, ok: d[a.statusField] === a.okStatus, id, status: d[a.statusField] };
   }
 
-  /** Every cmd template of the map with its header (sysex-plain), for a framer that reads cmds of several lengths. */
+  /**
+   * Every cmd template of the map with its header (sysex-plain), for a framer that reads cmds of several lengths. The
+   * whole map's, whatever the mode: a mode only renames or drops messages, and a framer built in one mode must still
+   * split the cmds of a mode the unit switches to before the driver has read it.
+   */
   knownCmds(): KnownCmd[] {
     const seen = new Map<string, KnownCmd>();
-    for (const m of Object.values(this.messages)) {
+    const d = this.firmwareListed ? this.protocol.firmwares![this.firmwareEntry!].messages : undefined;
+    for (const m of Object.values({ ...this.protocol.messages, ...d })) {
       const k = `${m.header ?? ""}|${m.cmd}`;
       if (!seen.has(k)) seen.set(k, m.header === undefined ? { cmd: m.cmd } : { cmd: m.cmd, header: m.header });
     }
@@ -3270,8 +4731,8 @@ export class ProtocolCodec {
   /**
    * The messages from one side (the device's replies and notifies, or the host's requests and sends) that a payload on
    * this cmd reads as, by their sizes, consts and `not`s: the most specific first (more fixed cmd bytes, then a layout
-   * the payload fills exactly, then more payload bytes pinned), then in the map's order. More than one name means the
-   * map can't tell them apart. `header`: the entry of transport.frame.headers it came under (sysex-plain).
+   * the payload fills exactly, then more payload bytes pinned), then by name. More than one name means the map can't
+   * tell them apart. `header`: the entry of transport.frame.headers it came under (sysex-plain).
    */
   identify(cmd: Uint8Array, payload: Uint8Array, from: Side, header?: string): string[] {
     const dirs = SIDE_DIRS[from];
@@ -3281,46 +4742,90 @@ export class ProtocolCodec {
         const cmdBytes = this.messages[n].cmd.split(" ").filter((t) => !t.startsWith("{")).length;
         return { n, cmdBytes, exact: layoutSize(this.payloadLayout(n)) === payload.length ? 1 : 0, pinned: this.shapeOf(n).is.size };
       })
-      .sort((a, b) => b.cmdBytes - a.cmdBytes || b.exact - a.exact || b.pinned - a.pinned)
+      // the last tie-break is the name, not the map's key order, which a canonical (RFC 8785) round trip re-sorts
+      .sort((a, b) => b.cmdBytes - a.cmdBytes || b.exact - a.exact || b.pinned - a.pinned || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0))
       .map((x) => x.n);
   }
 
   /**
-   * Pairs of messages from the same side, on cmds that can be the same bytes, that one payload can read as both: the
-   * map pins no byte (const or `not`) or length that tells them apart. A frame of either is named by `identify` alone.
+   * Pairs of messages from the same side, under the same header, on cmds that can be the same bytes (as their address
+   * fields move them), that one payload can read as both: the map pins no byte (const or `not`, a packed tail's layout
+   * included) or length that tells them apart. A frame of either is named by `identify` alone.
    */
   lookalikes(): [string, string][] {
     const out: [string, string][] = [];
     for (const dirs of Object.values(SIDE_DIRS)) {
-      const names = Object.keys(this.messages).filter((n) => dirs.includes(this.messages[n].dir));
+      // by name, so the list doesn't depend on the map's key order
+      const names = Object.keys(this.messages).filter((n) => dirs.includes(this.messages[n].dir)).sort();
       names.forEach((a, i) => {
         for (const b of names.slice(i + 1)) {
-          if (cmdsOverlap(this.messages[a].cmd, this.messages[b].cmd) && shapesMeet(this.shapeOf(a), this.shapeOf(b))) out.push([a, b]);
+          if (this.messages[a].header === this.messages[b].header && this.cmdsMeet(a, b) && shapesMeet(this.shapeOf(a), this.shapeOf(b))) out.push([a, b]);
         }
       });
     }
     return out;
   }
 
+  /** A message's address terms, worked out once: messagesForCmd asks every message for every incoming frame. */
+  private termsOf(name: string): AddressTerm[] {
+    let terms = this.terms.get(name);
+    if (!terms) this.terms.set(name, (terms = this.addressFields(name).map((f) => addressTerm(f, this.ctx, this.protocol.addresses))));
+    return terms;
+  }
+
+  /**
+   * Whether two messages can go on the same cmd bytes: their templates overlap, or, where either has address fields,
+   * some address both reach. A search too long to finish counts as meeting (a lookalike is only ever a warning).
+   */
+  private cmdsMeet(a: string, b: string): boolean {
+    const t = this.protocol.transport;
+    const [x, y] = [this.messages[a].cmd, this.messages[b].cmd];
+    if (t.framing !== "roland-address") return cmdsOverlap(x, y);
+    if (!this.addressFields(a).length) {
+      if (!this.addressFields(b).length) return cmdsOverlap(x, y);
+      [a, b] = [b, a];
+    }
+    // a has address fields and a fixed cmd: walk the addresses it reaches, and ask b for each
+    const at = t.inner.cmdLength - t.inner.addressBytes;
+    const cmd = this.cmd(a);
+    if (!cmdsOverlap(hexOf(cmd.subarray(0, at)), this.messages[b].cmd.split(" ").slice(0, at).join(" "))) return false;
+    const terms = this.termsOf(a);
+    const base = addressValue(cmd.subarray(at));
+    let reached: number[][];
+    try {
+      reached = searchAddress(terms, terms.reduce((n, x) => n + termMin(x), 0), terms.reduce((n, x) => n + termMax(x), 0), MAX_LOOKALIKE_ADDRESSES);
+    } catch (e) {
+      if (e instanceof AddressSearchTooLong) return true;
+      throw e;
+    }
+    if (reached.length >= MAX_LOOKALIKE_ADDRESSES) return true;
+    const offset = (k: number, w: number) => {
+      const term = terms[k];
+      return "options" in term ? term.options.find(([v]) => v === w)![1] : w * term.stride;
+    };
+    return reached.some((ws) => {
+      const address = base + ws.reduce((n, w, k) => n + offset(k, w), 0);
+      if (address >= 128 ** t.inner.addressBytes) return false;
+      cmd.set(addressBytes(address, t.inner.addressBytes), at);
+      return this.addressOf(b, cmd) !== undefined;
+    });
+  }
+
   /** A message's frame shape, worked out once: identify runs on every frame a simulator or a sniff decode reads. */
   private shapeOf(name: string): FrameShape {
     let s = this.shapes.get(name);
-    if (!s) this.shapes.set(name, (s = frameShape(this.payloadLayout(name), this.protocol.transport.endian)));
+    if (!s) this.shapes.set(name, (s = frameShape(this.payloadLayout(name), this.protocol.transport.endian, this.layouts)));
     return s;
   }
 
   /**
-   * Incoming dispatch: the device-side messages (reply/notify, then request) whose fixed cmd bytes match, under the
-   * named header (sysex-plain) or, by default, the device's own.
+   * Incoming dispatch: the device-side messages (reply/notify, then request) whose fixed cmd bytes match, or whose
+   * address fields reach the cmd's address, under the named header (sysex-plain) or, by default, the device's own.
    */
   messagesForCmd(cmd: Uint8Array, header?: string): string[] {
-    const hex = Array.from(cmd, (b) => b.toString(16).padStart(2, "0"));
     const rank = { reply: 0, notify: 1, request: 2, send: 3 } as const;
     return Object.entries(this.messages)
-      .filter(([, m]) => {
-        const t = m.cmd.split(" ");
-        return m.header === header && t.length === hex.length && t.every((x, i) => x.startsWith("{") || x === hex[i]);
-      })
+      .filter(([n, m]) => m.header === header && this.addressOf(n, cmd) !== undefined)
       .sort(([, a], [, b]) => rank[a.dir] - rank[b.dir])
       .map(([n]) => n);
   }

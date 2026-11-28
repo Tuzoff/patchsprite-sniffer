@@ -5,7 +5,9 @@
 // the engine reads it (parseProtocol: "0x.." numbers as numbers, no defaults added) for one firmware (its delta merged).
 
 import type { EntrySource, Field, Layout, Message, Protocol } from "./protocol-schema.ts";
-import { ProtocolCodec, tailLayoutName } from "./protocol-schema.ts";
+import { groupsInMode, modeNames, standIns } from "./modes.ts";
+import { isAddressField, ProtocolCodec, tailLayoutName } from "./protocol-schema.ts";
+import { IDENTITY_ENTRY } from "./identity.ts";
 import { canonicalJson, fingerprint } from "./canonical-json.ts";
 
 export { canonicalJson, fingerprint };
@@ -17,9 +19,17 @@ export { canonicalJson, fingerprint };
  *   has a packed tail read with a shared layout or joined into a record (`packed.pieces`), [the message's tail layout
  *   or null, the reply's or null] (the enums include those its fields name);
  * - `param/<owner>/<id>`: the parameter's definition in the first parameter group that lists the owner (a block, or
- *   the effect type whose table a slot takes) and the id;
+ *   the effect type whose table a slot takes) and the id, of the groups that stand in for no other in a mode;
+ *   `param/<owner>/<id>/<group>`: in that group, one that stands in for another in some mode (`modes.use`);
+ * - `<message>@<mode>` (and on one block): the message as that mode reads it, where the mode stands in layouts or enums;
+ * - `linked/<owner>/<set>`: [the linked set, its parameters' definitions in its order], from the group that lists the
+ *   owner, of the groups that stand in for no other in a mode;
  * - `choice/<name>`: [the choice, [[where, field], ...] for every field that names it, by message and then by layout
- *   (`layout <name>`), each in the map's order, the enums those fields name].
+ *   (`layout <name>`), each in the map's order, the enums those fields name];
+ * - `control/<name>`: [the control's definition in the map's `controls.items`, the enum it names or null];
+ * - `presets/<index>`: the map's `controls.presets`, whatever the index (a repair of the preset select repairs them all);
+ * - `identity`: the map's `identity` (what the unit answers to the MIDI identity request, and how its firmware is read
+ *   from that), without `source`, `firmwareSource` and `note`.
  * The enums are an object of each enum a field names (`enum`) to its definition: a repaired enum value (a block's id)
  * repairs every entry that reads it. Keys that say where a claim comes from or what it means to a person (`source`,
  * `note`, on the message, parameter or choice and on each field) are left out: a map that only records better
@@ -35,7 +45,23 @@ function definition(protocol: Protocol, firmware: string | undefined, entry: str
   const top = <T extends object>(d: T): T => (before25Nov ? strip(d, ["source"]) : bare(d));
   const field = <T extends object>(d: T): T => (before25Nov ? d : bare(d));
   const lay = (l: Layout): Layout => (before25Nov ? l : bareLayout(l));
-  const msg = (m: Message): Message => (before25Nov ? strip(m, ["source"]) : bareMessage(m));
+  const msg = (m: Message): Message => (before25Nov ? strip(m, ["source", "safeRead", "readBack"]) : bareMessage(m));
+  if (entry.startsWith("linked/")) {
+    const [, owner, name] = entry.split("/");
+    // the set and its parameters' definitions: a repaired range or option changes what the rules allow
+    for (const g of Object.values(groupsInMode(protocol, {}))) {
+      if (!g.blocks?.includes(owner) && !g.types?.includes(owner)) continue;
+      const set = g.linked && Object.hasOwn(g.linked, name) ? g.linked[name] : undefined;
+      return set ? [top(set), set.params.map((n) => (Object.hasOwn(g.params, n) ? top(g.params[n]) : null))] : null;
+    }
+    return null;
+  }
+  // the unit's identity: its bytes and how its firmware is read, not where they come from
+  if (entry === IDENTITY_ENTRY && !codec.hasMessage(entry)) return protocol.identity ? strip(protocol.identity, IDENTITY_PROVENANCE) : null;
+  // a message as a mode reads it (`getPreset@bass`): in that mode's view
+  const moded = inItsMode(codec, entry);
+  if (!moded) return null;
+  [codec, entry] = moded;
   const [kind, a] = entry.split("/");
   const claim = entryClaim(codec, entry);
   if (claim === undefined) return null;
@@ -43,7 +69,11 @@ function definition(protocol: Protocol, firmware: string | undefined, entry: str
     const fields = fieldsNaming(codec, a);
     return [top(claim), fields.map(([where, f]) => [where, field(f)]), enumsNamed(codec, fields.map(([, f]) => f))];
   }
-  if (kind === "param") return top(claim);
+  if (kind === "param" || kind === "presets") return top(claim);
+  if (kind === "control") {
+    const e = (claim as { enum?: string }).enum;
+    return [top(claim), e !== undefined && Object.hasOwn(codec.enums, e) ? codec.enums[e] : null];
+  }
   const m = codec.message(kind);
   const reply = m.reply?.message;
   const layout = codec.payloadLayout(kind);
@@ -57,8 +87,12 @@ function definition(protocol: Protocol, firmware: string | undefined, entry: str
   const tails = [tail(layout), replied ? tail(replied[1]) : null];
   const fields = [...layout.fields, ...(replied?.[1].fields ?? []), ...tails.flatMap((t) => t?.fields ?? [])];
   // the transport's byte order is every field's that sets none: a repair to it repairs every message
-  const def = [msg(m), lay(layout), replied, enumsNamed(codec, fields), protocol.transport.endian];
-  return tails.some((t) => t !== null) ? [...def, tails] : def;
+  const base = [msg(m), lay(layout), replied, enumsNamed(codec, fields), protocol.transport.endian];
+  const def = tails.some((t) => t !== null) ? [...base, tails] : base;
+  // the address tables its address fields read: a repair to one moves the message (left out where none, so the
+  // fingerprints of messages without address fields stay as they were)
+  const tables = [...new Set(fields.filter(isAddressField).flatMap((f) => f.address.table ?? []))];
+  return tables.length ? [...def, Object.fromEntries(tables.map((t) => [t, protocol.addresses?.[t] ?? null]))] : def;
 }
 
 /**
@@ -68,11 +102,15 @@ function definition(protocol: Protocol, firmware: string | undefined, entry: str
 export const entryFingerprintBefore25Nov = (protocol: Protocol, firmware: string | undefined, entry: string, codec = new ProtocolCodec(protocol, firmware)): string =>
   fingerprint(definition(protocol, firmware, entry, codec, true));
 
+/** Keys of `identity` that say where its claims come from or what they mean to a person. */
+const IDENTITY_PROVENANCE: readonly string[] = ["source", "firmwareSource", "note"];
+
 /**
- * Keys of a message, parameter, choice or field that say where a claim comes from or what it means to a person, not
- * what the unit does: a change to them repairs nothing, so no fingerprint covers them.
+ * Keys of a message, parameter, choice or field that say where a claim comes from, what it means to a person or how to
+ * test it (a message's `safeRead` and `readBack`), not what the unit does: a change to them repairs nothing, so no
+ * fingerprint covers them.
  */
-const NOT_FINGERPRINTED: readonly string[] = ["source", "note"];
+const NOT_FINGERPRINTED: readonly string[] = ["source", "note", "safeRead", "readBack"];
 
 /** A definition without some keys, at its top level. */
 function strip<T extends object>(def: T, keys: readonly string[]): T {
@@ -94,21 +132,46 @@ function bareMessage(m: Message): Message {
 
 /**
  * The map's own claim behind an entry, as one firmware reads it: the message (for a message on one block too), the
- * parameter (in the first group that lists the block and has the id) or the choice; undefined for one the map lacks.
+ * parameter (in the first group that lists the block and has the id), the choice, the channel-message control or the
+ * preset select; undefined for one the map lacks.
  */
 function entryClaim(codec: ProtocolCodec, entry: string): { source?: EntrySource } | undefined {
+  const moded = inItsMode(codec, entry);
+  if (!moded) return undefined;
+  [codec, entry] = moded;
   const { protocol } = codec;
-  const [kind, a, b] = entry.split("/");
+  const [kind, a, b, c] = entry.split("/");
   if (kind === "choice") return protocol.choices && Object.hasOwn(protocol.choices, a) ? protocol.choices[a] : undefined;
   if (kind === "param") {
-    for (const g of Object.values(protocol.parameters?.groups ?? {})) {
+    const groups = protocol.parameters?.groups ?? {};
+    // a group that stands in for another in some mode is named in the entry; the others are the map's own
+    const named = c === undefined ? Object.values(groupsInMode(protocol, {})) : Object.hasOwn(groups, c) && standIns(protocol, "groups").has(c) ? [groups[c]] : [];
+    for (const g of named) {
       if (!g.blocks?.includes(a) && !g.types?.includes(a)) continue;
       const def = Object.values(g.params).find((p) => p.id === Number(b));
       if (def) return def;
     }
     return undefined;
   }
-  return codec.hasMessage(kind) ? codec.message(kind) : undefined;
+  if (codec.hasMessage(kind)) return codec.message(kind);
+  // a unit driven by channel messages: its controls, and its preset select (a map that names no message so)
+  const controls = protocol.controls;
+  // a control and the preset select carry no source: the claim is there, with nothing behind it
+  if (kind === "control") return controls && Object.hasOwn(controls.items, a) ? (controls.items[a] as { source?: EntrySource }) : undefined;
+  if (kind === "presets" && b === undefined) return controls?.presets as { source?: EntrySource } | undefined;
+  return undefined;
+}
+
+/**
+ * An entry tagged with a mode (`getPreset@bass/amp`) as that mode's codec reads it, untagged; any other as it is; undefined
+ * for a mode the map does not name.
+ */
+function inItsMode(codec: ProtocolCodec, entry: string): [ProtocolCodec, string] | undefined {
+  const [head, ...rest] = entry.split("/");
+  const [name, mode] = head.split("@");
+  if (mode === undefined) return [codec, entry];
+  if (!modeNames(codec.protocol).includes(mode)) return undefined;
+  return [new ProtocolCodec(codec.protocol, codec.firmware, undefined, mode), [name, ...rest].join("/")];
 }
 
 /** Where the map says an entry's claim comes from (`source`), or undefined when it doesn't say or lacks the entry. */
@@ -118,8 +181,9 @@ export const entrySource = (codec: ProtocolCodec, entry: string): EntrySource | 
 function enumsNamed(codec: ProtocolCodec, fields: readonly Field[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of fields) {
-    const e = "enum" in f ? f.enum : undefined;
-    if (e !== undefined && Object.hasOwn(codec.enums, e)) out[e] = codec.enums[e];
+    // its own enum, and the ones its enumBy picks from (added only where it has one, so other fingerprints stay)
+    const named = f.type === "bytes" || f.type === "string" || f.type === "pad" ? [] : [f.enum, ...Object.values(f.enumBy?.enums ?? {})];
+    for (const e of named) if (e !== undefined && Object.hasOwn(codec.enums, e)) out[e] = codec.enums[e];
   }
   return out;
 }
@@ -130,8 +194,8 @@ export const entryFingerprint = (protocol: Protocol, firmware: string | undefine
 
 /** The fields that name a choice: their ranges and enums settle it, so a repair to one of them repairs the choice. */
 function fieldsNaming(codec: ProtocolCodec, choice: string): [string, Field][] {
-  const { protocol, firmware } = codec;
-  const fw = firmware !== undefined && protocol.firmwares && Object.hasOwn(protocol.firmwares, firmware) ? protocol.firmwares[firmware] : undefined;
+  const { protocol, firmwareEntry } = codec;
+  const fw = firmwareEntry !== undefined ? protocol.firmwares![firmwareEntry] : undefined;
   const out: [string, Field][] = [];
   const add = (where: string, l: Layout) => {
     for (const f of l.fields) if ("choice" in f && f.choice === choice) out.push([where, f]);

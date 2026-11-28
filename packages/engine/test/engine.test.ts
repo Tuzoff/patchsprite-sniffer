@@ -9,6 +9,7 @@ import {
   entryFingerprint,
   fingerprint,
   LabelFormat,
+  livenessRead,
   MapCheckRecordSchema,
   MapCheckStateSchema,
   MEASURED_FIELDS,
@@ -118,8 +119,22 @@ test("map-check records list every outcome, answered-on-resend among them", () =
   const state = { schema: 2, firmwares: { "2.04": { pins: { presetOrder: { option: "lsbFirst", fp: "a", at: "b" } }, entries: { getPreset: { trust: "verified", fp: "a", at: "b" } } } } };
   assert.ok(MapCheckStateSchema.safeParse(state).success);
   state.firmwares["2.04"].entries.getPreset.trust = "blocked";
-  assert.equal(MapCheckStateSchema.safeParse(state).success, false, "blocked comes from the map, never a mark");
+  assert.ok(MapCheckStateSchema.safeParse(state).success, "a freeze blocks an entry by a mark");
+  state.firmwares["2.04"].entries.getPreset.trust = "unchecked";
+  assert.equal(MapCheckStateSchema.safeParse(state).success, false, "unchecked is no mark");
+  const later = { ...state, firmwares: { "2.04": { pins: {}, entries: {}, unverifiable: { setGain: { fp: "a", at: "b" } }, laterRecord: {} } }, laterKey: 1 };
+  assert.deepEqual(MapCheckStateSchema.parse(later), later, "a later build's keys are kept");
   assert.equal(weakest(["verified", "suspect", "shape-ok"]), "suspect");
+});
+
+test("the liveness read is the first bare safeRead request one reply answers; none marked, none given", () => {
+  const map = rawMap();
+  assert.equal(livenessRead(new ProtocolCodec(parseProtocol(map), "2.04")), undefined, "no safeRead: the driver asks the identity request");
+  map.messages.setScene.safeRead = { fields: { scene: 1 } }; // sent with its own values: not bare
+  assert.equal(livenessRead(new ProtocolCodec(parseProtocol(map), "2.04")), undefined, "a read that needs fields is no liveness read");
+  map.messages.getPresetName.safeRead = true;
+  map.messages.getPreset.safeRead = true;
+  assert.equal(livenessRead(new ProtocolCodec(parseProtocol(map), "2.04")), "getPreset", "the first in the map's order");
 });
 
 test("LZO, labels and port names", () => {
