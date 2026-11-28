@@ -12,6 +12,13 @@ import { z } from "zod";
 const HIDDEN = "\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u2800\\ufff9-\\ufffb\\p{Default_Ignorable_Code_Point}";
 const NO_HIDDEN = new RegExp(`^[^${HIDDEN}]*$`, "u");
 const ONE_LINE = new RegExp(`^[^${HIDDEN}\\t\\n]*$`, "u");
+const HIDDEN_CHAR = new RegExp(`[${HIDDEN}\\t\\n]`, "gu");
+/**
+ * Text from a map that no schema check passed (a key the schema refused, say), made safe to show: every control,
+ * invisible or direction character, tabs and line breaks too, is written as its \u{...} escape, so nothing is hidden.
+ */
+export const shownText = (s: string): string => s.replace(HIDDEN_CHAR, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+
 /** Free text from a map (a note, a reason, a source): any printing characters and line breaks. */
 export const text = () => z.string().regex(NO_HIDDEN, "text has no control, invisible or direction characters");
 /** A name or label from a map, shown to the player: one line of printing characters. */

@@ -901,7 +901,7 @@ const HostSchema = z.strictObject({
   editor: EditorSchema.optional(),
 });
 
-const version = z.string().regex(VERSION_PATTERN, "a version is dotted whole numbers, maybe after a V, such as 4.00, 21 or V1.2.0");
+const version = z.string().regex(VERSION_PATTERN, "a version is dotted whole numbers, maybe after a V, such as 2.00, 21 or V1.2.0");
 const FirmwareDeltaSchema = z.strictObject({
   /**
    * The versions this entry covers besides its own key: from `from` (included) up to `below` (left out), either end
@@ -1947,7 +1947,7 @@ function choicesIssues(p: ProtocolShape): string[] {
  */
 function firmwareRangeIssues(p: ProtocolShape): string[] {
   const out: string[] = [];
-  // two keys that are one version written two ways ("4.0" and "4.00") would leave that version two entries
+  // two keys that are one version written two ways ("2.0" and "2.00") would leave that version two entries
   const byVersion = new Map<string, string>();
   for (const fw of Object.keys(p.firmwares ?? {})) {
     const v = versionParts(fw);

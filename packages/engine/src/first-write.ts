@@ -1,5 +1,5 @@
-// The first write to an untested seed map, proven by an echo (first contact, step 5 of the design: "First write,
-// proven by an echo"). A seed's write is never trusted on the word of its source: before the player's change goes out,
+// The first write to an untested seed map, proven by an echo (first contact: "First write, proven by an echo"). A
+// seed's write is never trusted on the word of its source: before the player's change goes out,
 // the driver writes back the value the write's paired read has just returned, so the sound does not change, and reads
 // again. An unchanged read-back proves the message and its framing; only then does the player's change go out, with
 // the value read first kept to put back if the change reads back otherwise.
@@ -7,7 +7,7 @@
 // The echo proves a message, never an encoding the map leaves open: a write whose encoding depends on a choice this
 // unit has not settled is refused before the echo, so a wrong byte order can't read back right twice and pass. On a
 // confirmed map that lists this unit's firmware as checked nothing here runs, and writes go out as before; on one that
-// doesn't (a beta map), a write the map pairs with a read is echoed first too. Nothing here sends a message on its own:
+// doesn't (an unverified map), a write the map pairs with a read is echoed first too. Nothing here sends a message on its own:
 // the driver gives it the steps.
 
 import type { TrustLevel, UnitChecks } from "./map-checks.ts";
@@ -21,13 +21,13 @@ export interface DraftTrust {
   /** True while the map is an unconfirmed seed: every write goes through the gate. False leaves writes as they were. */
   readonly draft: boolean;
   /**
-   * True for a confirmed map that lists no check of this unit's firmware (a beta map no unit has verified): a write the
+   * True for a confirmed map that lists no check of this unit's firmware (one no unit has verified): a write the
    * map pairs with a read is proven by an echo first, as on a draft, until this unit has verified it; one with no
    * read goes out as before (the status says to be ready to restart the unit). Refusals are as on a draft.
    */
   readonly unverified?: boolean;
   /**
-   * With `unverified`: the unit is read-only in the beta (the remote server), so what an echo can't prove is refused
+   * With `unverified`: the caller keeps the unit read-only, so what an echo can't prove is refused
    * instead of going out as before: a write the map pairs with no read, and anything that outlives the edit buffer.
    * Each write opens on its own once the map pairs it with a read; nothing turns the whole unit writable, and no trust
    * level (verified or player-confirmed) opens a write the map pairs with no read.
@@ -52,8 +52,8 @@ const OFF: Partial<Record<TrustLevel, string>> = {
 };
 
 /**
- * A beta unit's refusal of a write no echo can prove. It names the same cause as the gate's other refusals on a beta
- * map (the map not checked on this firmware), so the chat gives one reason.
+ * A read-only unit's refusal of a write no echo can prove. It names the same cause as the gate's other refusals on an
+ * unverified map (the map not checked on this firmware), so the chat gives one reason.
  */
 export function readOnly(doing: string, why = "the map pairs no read with this change to check it lands"): SafetyError {
   return new SafetyError(
@@ -77,7 +77,7 @@ export function gateWrite(
   w: { message: string; entry: string; value?: unknown; kind: WriteKind; readBack: boolean; doing: string },
 ): Gate {
   if (!trust.draft && !trust.unverified) return "write";
-  // a confirmed map's stores and resets are as they were: only a draft keeps them off, and the beta's read-only units
+  // a confirmed map's stores and resets are as they were: only a draft keeps them off, and a read-only unit
   if (!trust.draft && w.kind !== "change") {
     if (trust.readOnly) throw readOnly(w.doing, `it doesn't ${KIND_TEXT[w.kind]} until then`);
     return "write";

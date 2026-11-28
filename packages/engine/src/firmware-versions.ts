@@ -1,6 +1,6 @@
-// Firmware versions as the device map compares them: dotted whole numbers ("4.00", "21", "20240101"), with or without
-// a leading "V" ("V1.2.0"), compared part by part as numbers, a missing part counting as 0 ("4" = "4.0" = "4.00";
-// "3.10" is after "3.9"). A version that is not dotted numbers ("1.2b", "unknown") matches only a firmware entry keyed
+// Firmware versions as the device map compares them: dotted whole numbers ("2.00", "21", "20260101"), with or without
+// a leading "V" ("V1.2.0"), compared part by part as numbers, a missing part counting as 0 ("2" = "2.0" = "2.00";
+// "1.10" is after "1.9"). A version that is not dotted numbers ("1.2b", "unknown") matches only a firmware entry keyed
 // by exactly it, never a range.
 
 /** The text a version range bound takes: up to four dotted whole numbers of up to nine digits each, maybe after a V. */
@@ -48,7 +48,7 @@ export function firmwareEntryKey(firmwares: Record<string, { range?: VersionRang
   const v = versionParts(version);
   if (!v) return undefined;
   const keys = Object.keys(firmwares);
-  // the same version written another way ("4.0" for an entry keyed "4.00") is still its own entry
+  // the same version written another way ("2.0" for an entry keyed "2.00") is still its own entry
   const same = keys.find((k) => {
     const kv = versionParts(k);
     return kv !== undefined && compareVersions(kv, v) === 0;

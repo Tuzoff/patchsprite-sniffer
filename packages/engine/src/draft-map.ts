@@ -8,7 +8,7 @@
 // where one of those does not load is refused whole.
 
 import { z } from "zod";
-import { text } from "./map-text.ts";
+import { shownText, text } from "./map-text.ts";
 import { ProtocolError, ProtocolSchema, type Protocol } from "./protocol-schema.ts";
 
 // ---- limits ----------------------------------------------------------------------------------------------------
@@ -414,8 +414,12 @@ export function draftEntryText(id: string): string {
   return p.join(" ");
 }
 
+/** At most this many ignored top-level keys are listed, each cut to this length: the list reaches the chat. */
+const MAX_IGNORED = 32;
+const MAX_IGNORED_KEY = 64;
+
 const clip = (s: string) => {
-  const line = s.replace(/\s+/g, " ").trim();
+  const line = shownText(s.replace(/\s+/g, " ").trim());
   return line.length > MAX_REASON ? `${line.slice(0, MAX_REASON - 1)}…` : line;
 };
 
@@ -424,7 +428,7 @@ const clip = (s: string) => {
 /** Protocols loaded from a draft. Kept beside them, not in them, so the protocol's shape stays the schema's. */
 const drafts = new WeakSet<Protocol>();
 
-/** Whether a protocol came from a draft map no real unit has confirmed (for write gating by trust, not built yet). */
+/** Whether a protocol came from a draft map no real unit has confirmed (first-write.ts keeps its writes gated). */
 export const isDraftProtocol = (p: Protocol): boolean => drafts.has(p);
 
 /** How a draft loads: against which features, and the driver's own rules. */
@@ -457,8 +461,9 @@ export function loadDraftProtocol(json: unknown, opts: DraftOptions = {}): Draft
   const ignored: string[] = [];
   for (const [k, v] of Object.entries(json)) {
     if (known.has(k)) map[k] = structuredClone(v);
-    else if (k !== "requires" && k !== "gaps") ignored.push(k);
+    else if (k !== "requires" && k !== "gaps") ignored.push(clip(k).slice(0, MAX_IGNORED_KEY));
   }
+  if (ignored.length > MAX_IGNORED) ignored.splice(MAX_IGNORED, Infinity, `and ${ignored.length - MAX_IGNORED} more`);
 
   const missing = new Set<string>();
   const unsupported: UnsupportedEntry[] = [];
@@ -472,13 +477,13 @@ export function loadDraftProtocol(json: unknown, opts: DraftOptions = {}): Draft
     // a block the schema can't take in full still blocks with its cmd alone: kept as that, and said so
     // only a base block blocks every home; one blocked on some firmwares would be a bare, sendable cmd on the others
     if (kept && !stated && e.message !== undefined && baseBlocked(map, e.message) && toBlockOnly(map, e)) {
-      unsupported.push({ entry: e.message, why: clip(`kept as a block only (its cmd), since ${reason}`), blockOnly: true });
+      unsupported.push({ entry: shownText(e.message), why: clip(`kept as a block only (its cmd), since ${reason}`), blockOnly: true });
       return true;
     }
     if (kept) throw new DraftMapError(`${e.ids[0]} does not load (${clip(reason)}), and ${kept}`);
     let removed = false;
     for (const h of e.homes) if (remove(map, h)) removed = true;
-    if (removed) for (const id of e.ids) unsupported.push({ entry: id, why: clip(reason), ...(feature ? { feature } : {}) });
+    if (removed) for (const id of e.ids) unsupported.push({ entry: shownText(id), why: clip(reason), ...(feature ? { feature } : {}) });
     return removed;
   };
 
