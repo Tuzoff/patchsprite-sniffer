@@ -2,7 +2,7 @@
 // object keys sorted by UTF-16 code units, no whitespace, numbers as ECMAScript prints them, members whose value is
 // undefined left out), and a fingerprint is the first 16 hex digits of the SHA-256 of that text as UTF-8. The same
 // form as the closed app's map fingerprints, checked against the same test vectors
-// (test/fixtures/fingerprint/canonical-vectors.json); the map-entry fingerprints join it when the engine moves here.
+// (test/fixtures/fingerprint/canonical-vectors.json); map-fingerprint.ts builds the map-entry fingerprints on it.
 
 import { sha256Hex } from "./sha256.ts";
 

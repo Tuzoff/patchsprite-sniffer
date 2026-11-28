@@ -6,6 +6,9 @@
 
 import { z } from "zod";
 import { canonicalJson, fingerprint } from "./canonical-json.ts";
+import { BlockedCmds } from "./cmd-overlap.ts";
+import { MEASURED_FIELDS } from "./measured-fields.ts";
+import { measuredFieldSchema, type BlockSeparation, type MeasuredField } from "./protocol-schema.ts";
 
 export const SEED_PATCH_FORMAT = "patchsprite-seed-patch";
 export const SEED_PATCH_VERSION = 1;
@@ -444,6 +447,10 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
     if (entry.kind === "message" && (entry.block !== undefined || entry.mode !== undefined) && isEdit)
       add(".entry", "edits go to the message itself, or to the mode's own entries (modes, layout/, enum/); a message on one block or in one mode is for marks");
 
+    // a measured value is one of the fields the map schema measures, in its shape: the app refuses a map with any other
+    const measuredField = entry.kind === "measured" && Object.hasOwn(MEASURED_FIELDS, entry.field) ? (entry.field as MeasuredField) : undefined;
+    if (entry.kind === "measured" && !measuredField)
+      add(".entry", `${entry.field} is not a measured field (${Object.keys(MEASURED_FIELDS).join(", ")})`);
     const homes = entryHomes(entry);
     const opSegs = (c.ops ?? []).map((op) => splitPointer(op.path));
     c.ops?.forEach((op, j) => {
@@ -458,6 +465,13 @@ export function checkSeedPatch(p: SeedPatch): Issue[] {
         add(`.ops[${j}]`, "provenance comes from the change's source and evidence, and status and gaps are the draft's own bookkeeping; ops never write them");
       if (writesSource(segs, "value" in op ? op.value : undefined, "value" in op))
         add(`.ops[${j}]`, "an entry's source comes from the change's source and evidence; ops never write it");
+      if (measuredField && op.op !== "remove") {
+        if (segs.length !== measuredField.split(".").length) add(`.ops[${j}].path`, "a measured value is written whole, at its field's path");
+        else if ("value" in op) {
+          const r = measuredFieldSchema(measuredField).safeParse(op.value);
+          if (!r.success) add(`.ops[${j}].value`, `not a measured value of ${measuredField}: ${r.error.issues.map((i) => `${i.path.join(".") || "value"} ${i.message}`).join("; ")}`);
+        }
+      }
       const other = overlapIn(edited, segs);
       if (other !== undefined) add(`.ops[${j}].path`, `${op.path} overlaps an edit of changes[${other}]`);
     });
@@ -542,50 +556,6 @@ function tailLayouts(layout: Json | undefined): string[] {
   if (!isObject(packed)) return [];
   const pieces = packed.pieces;
   return [packed.layout, isObject(pieces) ? pieces.layout : undefined].filter((l): l is string => typeof l === "string");
-}
-
-/** The app's longest cmd, in bytes (`transport.inner.cmdLength`). A longer one can't load, so it is judged by nothing. */
-const MAX_CMD_TOKENS = 8;
-
-/** A cmd's tokens and which of them are `{placeholders}`, as bits; null past the app's longest cmd. */
-function parseCmd(cmd: string): { toks: string[]; mask: number } | null {
-  const toks = cmd.toLowerCase().split(" ");
-  if (toks.length > MAX_CMD_TOKENS) return null;
-  return { toks, mask: toks.reduce((m, t, i) => (t.startsWith("{") ? m | (1 << i) : m), 0) };
-}
-
-const maskedKey = (toks: readonly string[], mask: number) => toks.map((t, i) => (mask & (1 << i) ? "*" : t)).join(" ");
-
-/**
- * Blocked cmds, for asking whether a cmd can be the bytes of one: as long, and each token the same or a placeholder on
- * either side (the app's rule). They are grouped by length and placeholder positions, so a lookup costs a Set probe
- * per group rather than a compare per cmd. A cmd past the app's longest can't load and matches everything.
- */
-class BlockedCmds {
-  private readonly groups = new Map<number, Map<number, string[][]>>();
-  private readonly keyed = new Map<string, Set<string>>();
-  private all = false;
-  add(cmd: string): void {
-    const c = parseCmd(cmd);
-    if (!c) return void (this.all = true);
-    let byMask = this.groups.get(c.toks.length);
-    if (!byMask) this.groups.set(c.toks.length, (byMask = new Map()));
-    const list = byMask.get(c.mask);
-    if (list) list.push(c.toks);
-    else byMask.set(c.mask, [c.toks]);
-  }
-  hits(cmd: string): boolean {
-    const c = parseCmd(cmd);
-    if (!c || this.all) return true;
-    for (const [mask, list] of this.groups.get(c.toks.length) ?? []) {
-      const both = mask | c.mask;
-      const id = `${c.toks.length}/${mask}/${both}`;
-      let keys = this.keyed.get(id);
-      if (!keys) this.keyed.set(id, (keys = new Set(list.map((t) => maskedKey(t, both)))));
-      if (keys.has(maskedKey(c.toks, both))) return true;
-    }
-    return false;
-  }
 }
 
 const SEP = "\u0000";
@@ -695,13 +665,7 @@ const LIFT_BLOCK = "may lift a block";
  * new there or rests on something else, and a mode only for a pair its stand-ins make new or move (in the base map, or
  * in `firmware`'s view of it).
  */
-export interface BlockSeparation {
-  firmware?: string;
-  mode?: string;
-  send: string;
-  blocked: string;
-  by: string;
-}
+export type { BlockSeparation } from "./protocol-schema.ts";
 
 export interface ReviewOptions {
   /**

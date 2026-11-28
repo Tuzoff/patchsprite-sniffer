@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "at": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "map": {
+      "type": "string",
+      "maxLength": 129,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "mapVersion": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "firmware": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "fp": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "entry": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "confirms",
+        "decodes",
+        "player-confirms",
+        "unverifiable",
+        "settles",
+        "contradicts",
+        "reopens",
+        "unsupported",
+        "disagrees",
+        "skipped",
+        "retried",
+        "answered-on-resend",
+        "froze",
+        "unblocked"
+      ]
+    },
+    "how": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "claimed": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "observed": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "why": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "strikes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    }
+  },
+  "required": [
+    "at",
+    "map",
+    "mapVersion",
+    "firmware",
+    "fp",
+    "entry",
+    "outcome"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    },
+    "__schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema1"
+          }
+        }
+      ]
+    }
+  },
+  "$id": "https://github.com/patchsprite-app/patchsprite-sniffer/schemas/map-check-record.v1.schema.json",
+  "title": "Patchsprite map-check record",
+  "description": "One check a unit made of its map entry, as an app logs it (one JSON object per line). packages/engine/src/map-check-record.ts."
+}

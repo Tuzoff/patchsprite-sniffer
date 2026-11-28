@@ -1,0 +1,179 @@
+{
+ "about": "Fingerprint test vectors (docs/formats/device-map.md, Fingerprints): a shared contract for other tools. canonical: a JSON value, its RFC 8785 form and fingerprint (the 'skip' member is undefined in the test, so it is left out). entries: entries of the made-up map in `map` (acme/rig-y with a preset-order choice, and a 2.05 firmware delta that widens setPreset), read for a firmware, and their fingerprints (getPreset and setBypass carry a `source`, and result and setTempo `note`s, which no fingerprint covers); mapVersion is the whole parsed map's.",
+ "canonical": [
+  {
+   "input": null,
+   "canonical": "null",
+   "fp": "74234e98afe7498f"
+  },
+  {
+   "input": true,
+   "canonical": "true",
+   "fp": "b5bea41b6c623f7c"
+  },
+  {
+   "input": 0,
+   "canonical": "0",
+   "fp": "5feceb66ffc86f38"
+  },
+  {
+   "input": -1.5,
+   "canonical": "-1.5",
+   "fp": "37c2b212b94e5372"
+  },
+  {
+   "input": 1e+21,
+   "canonical": "1e+21",
+   "fp": "241c4643fa70b1dc"
+  },
+  {
+   "input": "a\"b\\c\u0001",
+   "canonical": "\"a\\\"b\\\\c\\u0001\"",
+   "fp": "76f1072baa0d89ae"
+  },
+  {
+   "input": "é🎸",
+   "canonical": "\"é🎸\"",
+   "fp": "83ca86a6d2a84ffd"
+  },
+  {
+   "input": [
+    1,
+    null,
+    "x"
+   ],
+   "canonical": "[1,null,\"x\"]",
+   "fp": "821ba201c1e4a0fe"
+  },
+  {
+   "input": {
+    "b": 2,
+    "a": 1,
+    "c": {
+     "z": [],
+     "y": {}
+    }
+   },
+   "canonical": "{\"a\":1,\"b\":2,\"c\":{\"y\":{},\"z\":[]}}",
+   "fp": "774905abcff8f4ee"
+  },
+  {
+   "input": {
+    "é": 1,
+    "z": 2,
+    "A": 3,
+    "a": 4,
+    "€": 5,
+    "🎸": 6
+   },
+   "canonical": "{\"A\":3,\"a\":4,\"z\":2,\"é\":1,\"€\":5,\"🎸\":6}",
+   "fp": "155ba9b6767dac0e"
+  }
+ ],
+ "entries": {
+  "map": "vectors-map.json",
+  "mapVersion": "4b2ceef0d3ce305f",
+  "list": [
+   {
+    "firmware": "2.04",
+    "entry": "getPreset",
+    "fp": "fcf388cbf088c371"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "setPreset",
+    "fp": "d9c18bd400bb0dcf"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "setBypass/amp",
+    "fp": "6593bc0058cdca4f"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "param/amp/1",
+    "fp": "4c8fa2f73e66fa09"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "param/amp/999",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "choice/presetOrder",
+    "fp": "a1ba9f10bc216ebc"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "choice/none",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "noSuchMessage",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "result",
+    "fp": "b3c129cc249097cc"
+   },
+   {
+    "firmware": "2.04",
+    "entry": "setTempo",
+    "fp": "2788027ebe06d85b"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "getPreset",
+    "fp": "fcf388cbf088c371"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "setPreset",
+    "fp": "0be626753a342f6c"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "setBypass/amp",
+    "fp": "6593bc0058cdca4f"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "param/amp/1",
+    "fp": "4c8fa2f73e66fa09"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "param/amp/999",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "choice/presetOrder",
+    "fp": "141bacadc155b679"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "choice/none",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "noSuchMessage",
+    "fp": "74234e98afe7498f"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "result",
+    "fp": "b3c129cc249097cc"
+   },
+   {
+    "firmware": "2.05",
+    "entry": "setTempo",
+    "fp": "2788027ebe06d85b"
+   }
+  ]
+ }
+}

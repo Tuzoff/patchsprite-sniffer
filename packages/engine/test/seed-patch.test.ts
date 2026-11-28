@@ -671,6 +671,17 @@ test("a slot pedal's parameters are keyed by effect type: param/<type>/<id> find
   assert.deepEqual(reviewReasons(patch(map, reset), map), []);
 });
 
+test("a measured value is one of the map's measured fields, written whole in its field's shape", () => {
+  const timing = { value: 420, unit: "ms", measuredOn: "acme fx-1", date: "2026-11-24", source: "sniffer-capture" };
+  const add = (field: string, value: unknown, path = `/${field.split(".").join("/")}`): Change => ({ id: "c", entry: `measured/${field}`, action: "add", source: "wire", ops: [{ op: "add", path, value } as NonNullable<Change["ops"]>[number]], evidence: [capture] });
+  assert.deepEqual(messages(withChanges(add("transport.timing.compareToggle", timing))), []);
+  assert.match(messages(withChanges(add("transport.timing.replyTimeoutMs", timing))).join("\n"), /not a measured field/, "the app refuses a measured shape anywhere else");
+  assert.match(messages(withChanges(add("transport.timing.compareToggle", { ...timing, source: "probe" }))).join("\n"), /not a measured value of transport.timing.compareToggle: source/);
+  assert.match(messages(withChanges(add("transport.timing.compareToggle", { ...timing, unit: "s" }))).join("\n"), /unit/);
+  assert.match(messages(withChanges(add("transport.timing.compareToggle", 420))).join("\n"), /not a measured value/, "a bare number is no measured value");
+  assert.match(messages(withChanges(add("transport.timing.compareToggle", 420, "/transport/timing/compareToggle/value"))).join("\n"), /written whole/);
+});
+
 test("with block separations from the caller, a change that may lift a block names the pair and what keeps them apart", () => {
   const pin = (v: number) => ({ fields: [{ name: "magic", type: "u8", const: v }] });
   const base = seed();

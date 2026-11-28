@@ -18,6 +18,7 @@
     "packages/*/bin",
     "packages/*/test",
     "packages/*/test-windows",
+    "packages/*/scripts",
     "scripts"
   ]
 }

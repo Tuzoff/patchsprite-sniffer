@@ -1,7 +1,7 @@
 // Patchsprite's data folder: local and never synced. The app keeps its device maps, backups and the rest there, and
 // the pedal lock lives in it, so the app and the sniffer must find the same folder. PATCHSPRITE_HOME when set,
-// otherwise <home>\Claude\Patchsprite on Windows and $XDG_DATA_HOME/patchsprite (or ~/.local/share/patchsprite)
-// elsewhere.
+// otherwise <home>\Claude\Patchsprite on Windows, ~/Library/Application Support/Patchsprite on a Mac, and
+// $XDG_DATA_HOME/patchsprite (or ~/.local/share/patchsprite) elsewhere.
 //
 // Not %LOCALAPPDATA%: Claude Desktop is a Microsoft Store (MSIX) app, and Windows redirects what it and its children
 // (MCP servers) write under %LOCALAPPDATA% into its package's private copy, while a process outside the package sees
@@ -30,6 +30,11 @@ export function dataHome(env: NodeJS.ProcessEnv = process.env, opts: DataHomeOpt
 /** The data folder when PATCHSPRITE_HOME is not set. */
 export function defaultDataHome(env: NodeJS.ProcessEnv = process.env, { platform = process.platform, home = homedir() }: DataHomeOptions = {}): string {
   if (platform === "win32") return join(home, "Claude", "Patchsprite");
+  // a Mac keeps an app's files in Application Support; XDG_DATA_HOME is a Linux convention and is not read there. The
+  // app's simulator can stand in for a Mac (PATCHSPRITE_SIM_OS with PATCHSPRITE_TRANSPORT=sim), so a test sees this on
+  // any OS but Windows, and the lock's folder stays the app's
+  const simOs = env.PATCHSPRITE_TRANSPORT === "sim" ? env.PATCHSPRITE_SIM_OS : undefined;
+  if ((simOs ?? platform) === "darwin") return join(home, "Library", "Application Support", "Patchsprite");
   const xdg = env.XDG_DATA_HOME && isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : join(home, ".local", "share");
   return join(xdg, "patchsprite");
 }
