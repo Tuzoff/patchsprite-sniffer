@@ -33,7 +33,7 @@ const vectors = JSON.parse(readFileSync(fixture("fingerprint-vectors.json"), "ut
 const rawMap = () => JSON.parse(readFileSync(fixture(vectors.entries.map), "utf8"));
 const measuredValue = { value: 100, unit: "ms", measuredOn: "acme/fx-1 firmware 1.0.0", date: "2026-01-01", source: "manual" };
 
-test("entry fingerprints and the map version match the vectors shared with the app", () => {
+test("entry fingerprints and the map version match the shared vectors", () => {
   const protocol = parseProtocol(rawMap());
   assert.equal(fingerprint(protocol), vectors.entries.mapVersion);
   for (const e of vectors.entries.list as { firmware: string; entry: string; fp: string }[]) {

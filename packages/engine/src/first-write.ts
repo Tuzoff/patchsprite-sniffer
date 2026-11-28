@@ -57,7 +57,7 @@ const OFF: Partial<Record<TrustLevel, string>> = {
  */
 export function readOnly(doing: string, why = "the map pairs no read with this change to check it lands"): SafetyError {
   return new SafetyError(
-    `Patchsprite won't ${doing}: this unit is read-only in the beta for now. Its device map has not been checked on its firmware yet, and ${why}. Reading the unit and tone advice still work`,
+    `Patchsprite won't ${doing}: this unit is read-only for now. Its device map has not been checked on its firmware yet, and ${why}. Reading the unit and tone advice still work`,
   );
 }
 

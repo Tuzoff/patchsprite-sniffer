@@ -1,5 +1,5 @@
 {
-  "about": "When two cmd templates can be the same bytes (cmdsOverlap, and BlockedCmds asked about one cmd added to it): as many tokens, and each the same byte or a {placeholder} on either side. Hex is matched without case. Shared by the Patchsprite app and the sniffer; the cmds are made up.",
+  "about": "When two cmd templates can be the same bytes (cmdsOverlap, and BlockedCmds asked about one cmd added to it): as many tokens, and each the same byte or a {placeholder} on either side. Hex is matched without case. Shared with other tools; the cmds are made up.",
   "pairs": [
     { "a": "10", "b": "10", "overlap": true },
     { "a": "10", "b": "11", "overlap": false },

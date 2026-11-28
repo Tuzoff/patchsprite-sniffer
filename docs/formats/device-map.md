@@ -1129,7 +1129,7 @@ reports, never a person, machine or path.
 
 ## Fingerprints
 
-An entry's fingerprint lets the Patchsprite app, the sniffer and a map server tell whether an entry changed, so a
+An entry's fingerprint lets tools that read a map tell whether an entry changed, so a
 unit's marks on an entry (confirmed, suspect) hold until the entry is repaired. The form is pinned in the
 engine they share:
 

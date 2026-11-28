@@ -1,4 +1,4 @@
-// Fingerprints of device-map entries (docs/formats/device-map.md, "Fingerprints"): the app, the sniffer and the server
+// Fingerprints of device-map entries (docs/formats/device-map.md, "Fingerprints"): every tool that reads a map
 // must compute the same one for the same entry, so the form is pinned here, in the engine they share. A fingerprint is
 // the first 16 hex digits of the SHA-256 of the entry's definition in canonical JSON (RFC 8785, JCS): object keys
 // sorted by UTF-16 code units, no whitespace, members whose value is undefined left out. The definition is the map as

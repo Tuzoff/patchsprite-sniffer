@@ -1,5 +1,5 @@
 {
- "about": "Fingerprint test vectors (docs/formats/device-map.md, Fingerprints): a shared contract for the app, the sniffer and the cloud. canonical: a JSON value, its RFC 8785 form and fingerprint (the 'skip' member is undefined in the test, so it is left out). entries: entries of the made-up map in `map` (acme/rig-y with a preset-order choice, and a 2.05 firmware delta that widens setPreset), read for a firmware, and their fingerprints (getPreset and setBypass carry a `source`, and result and setTempo `note`s, which no fingerprint covers); mapVersion is the whole parsed map's.",
+ "about": "Fingerprint test vectors (docs/formats/device-map.md, Fingerprints): a shared contract for other tools. canonical: a JSON value, its RFC 8785 form and fingerprint (the 'skip' member is undefined in the test, so it is left out). entries: entries of the made-up map in `map` (acme/rig-y with a preset-order choice, and a 2.05 firmware delta that widens setPreset), read for a firmware, and their fingerprints (getPreset and setBypass carry a `source`, and result and setTempo `note`s, which no fingerprint covers); mapVersion is the whole parsed map's.",
  "canonical": [
   {
    "input": null,
