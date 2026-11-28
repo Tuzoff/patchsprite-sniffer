@@ -1,6 +1,7 @@
 // The `gate-approval` commit status (.github/workflows/gate-approval.yml). A pull request that changes how this repo's
 // pull requests are checked or merged (anything under .github/ or .claude/, this script, the checklist script, the
-// CLA and the licence) needs a maintainer's approval: the `gate-approved` label, added after the pull request's last
+// CLA, the licence, and the npm manifests CI installs from: any package.json, package-lock.json, npm-shrinkwrap.json or
+// .npmrc) needs a maintainer's approval: the `gate-approved` label, added after the pull request's last
 // push. The reviewer's `ai-gate-approved` label may stand in for it, except on a change only a maintainer may approve
 // (human-only below): a workflow line about permissions, write access, secrets, the job's token or the
 // pull_request_target, workflow_run and issue_comment triggers, this check's own files, or a diff GitHub doesn't show. Every other pull request passes at once.
@@ -20,7 +21,10 @@ export type ChangedFile = { filename: string; previous_filename?: string; patch?
 export type LabelEvent = { event: string; created_at: string; label?: { name: string }; actor?: { login: string } };
 
 const names = (f: ChangedFile) => [f.filename, f.previous_filename].filter((n): n is string => !!n);
-const isGate = (name: string) => GATE_FILES.has(name) || GATE_DIRS.some((d) => name.startsWith(d));
+/** the npm manifests, in any folder and any case (the Windows job's checkout reads PACKAGE.JSON as package.json) */
+const NPM_FILES = new Set(["package.json", "package-lock.json", "npm-shrinkwrap.json", ".npmrc"]);
+const isGate = (name: string) =>
+  GATE_FILES.has(name) || GATE_DIRS.some((d) => name.startsWith(d)) || NPM_FILES.has(name.split("/").at(-1)!.toLowerCase());
 
 /** the changed files that are part of the gate */
 export function gateFiles(files: ChangedFile[]): ChangedFile[] {
@@ -122,9 +126,10 @@ export async function main(): Promise<void> {
   const head: string = pull.head.sha;
   // a newer head than this run's event has its own run, which decides
   if (head !== env("HEAD_SHA")) return console.log(`The pull request moved on to ${head}; its own run decides.`);
+  // a status belongs to a commit, not a pull request: a pull request into another branch posts nothing, so it can
+  // neither pass nor fail a commit another pull request into main shares (the workflow runs only for main, too)
+  if (pull.base.ref !== "main") return console.log("Only pull requests into main are checked here; nothing posted.");
   await status(head, "pending", "Checking for gate changes and approval.");
-  // a status belongs to a commit, not a pull request: one into another branch with the same head could post success
-  if (pull.base.ref !== "main") return status(head, "failure", "Only pull requests into main are checked here.");
   try {
     const files = await all(`repos/${repo}/pulls/${pr}/files`);
     if (files.length >= 3000) throw new Error("GitHub lists at most 3000 files");

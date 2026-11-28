@@ -73,3 +73,10 @@ test("a force-push, reopen or branch restore counts as a push, so a deleted run 
   }
   assert.equal(pushedAt(runs, "A", [labeled("gate-approved", "2026-11-27T11:00:00Z")]), "2026-11-27T10:00:00Z");
 });
+
+test("the npm manifests, in any folder, are gate files", () => {
+  for (const filename of ["package.json", "package-lock.json", "packages/sniffer/package.json", ".npmrc", "npm-shrinkwrap.json", "PACKAGE.JSON", "sub/.NpmRc"]) {
+    assert.equal(gateFiles([{ filename, patch: "" }]).length, 1, filename);
+  }
+  assert.equal(gateFiles([{ filename: "packages/sniffer/src/package-json.ts", patch: "" }]).length, 0);
+});
