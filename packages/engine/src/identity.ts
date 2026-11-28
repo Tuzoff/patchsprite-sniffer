@@ -206,8 +206,16 @@ export function identitySourceProblems(want: MapIdentity): string[] {
   return out;
 }
 
+const unconfirmedSource = (source: MapIdentity["source"]): boolean => source === undefined || source.kind === "community-table";
+
+/** How a note names an unconfirmed source: a community table's, or a draft's with none. */
+export const unconfirmedSourceWords = (source: MapIdentity["source"]): string => (source ? "taken from a community table" : "a draft's, with no source");
+
 /** Whether nobody has seen a unit give the map's identity bytes: taken from a community table, or a draft's with no source. */
-export const identityUnconfirmed = (want: MapIdentity): boolean => want.source === undefined || want.source.kind === "community-table";
+export const identityUnconfirmed = (want: MapIdentity): boolean => unconfirmedSource(want.source);
+
+/** Whether nobody has seen a unit's identity reply give the firmware `identity.firmware` reads from it: the same test, for that rule's source. */
+export const identityFirmwareUnconfirmed = (want: MapIdentity): boolean => unconfirmedSource(want.firmwareSource);
 
 /**
  * Whether two identities state the same bytes: maker, family and model (or both leave the model out). Every answer
