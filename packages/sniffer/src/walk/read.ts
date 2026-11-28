@@ -52,9 +52,10 @@ export const REFUSED_EXTENSIONS: readonly string[] = [
  * backups only as these, so a save may write one. */
 export const SAVE_ONLY_EXTENSIONS: readonly string[] = [".syx", ".mid"];
 
-/** A fill saves when the button it presses says Save; the title alone doesn't count, since an Open dialog may be
- * titled "Open saved backup". */
-export const isSave = (button: string): boolean => /save/i.test(button);
+/** A fill saves when the button it presses is the standard Save button: its caption is exactly "Save" ("&" ignored).
+ * The title doesn't count, since an Open dialog may be titled "Open saved backup", nor does a button such as "Save to
+ * device", which may send the file on. */
+export const isSave = (button: string): boolean => button.replace(/&/g, "").trim().toLowerCase() === "save";
 
 /** Refuses a dialog path outside `root` or with a refused extension; returns the resolved path. */
 export function checkDialogPath(root: string, path: string, save = false): string {
@@ -87,7 +88,7 @@ export async function fillDialog(d: FillDeps, title: string, path: string, butto
   if (!title || !button) throw new InputError("a dialog fill needs the dialog's title and the button's caption");
   // Every #32770 window of the editor counts as a dialog, its own ones too, so a fill never presses a button that
   // a click would need the user's say-so for.
-  if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}": ask the user, and press it with editor_input if they say yes`);
+  if (HAZARD.test(button)) throw new InputError(`a dialog fill never presses "${button}", which can update firmware, reset, store over or delete. Tell the user; only they press it, by hand`);
   const full = checkDialogPath(d.allowedRoot, path, isSave(button));
   await d.beforeInput();
   const win = await editorWindow(d.host, d.app);

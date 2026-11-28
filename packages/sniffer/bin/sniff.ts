@@ -17,7 +17,8 @@ import { parseArgs } from "node:util";
 import { CaptureSession, type FridaDevice } from "../src/capture-session.ts";
 import { CaptureWriter } from "../src/capture-writer.ts";
 import { captureHeader, defaultCaptureName } from "../src/header.ts";
-import { acquirePedalLock, describePedalLock, releasePedalLock } from "@patchsprite/engine/pedal-lock";
+import type { CaptureRecord } from "@patchsprite/engine/capture";
+import { DeviceHold } from "../src/hold.ts";
 
 const USAGE = "usage: patchsprite-sniff capture --editor EXE --attach-delay SECONDS [--out FILE] [--note TEXT] | mcp";
 const fail = (code: number, text: string): never => {
@@ -86,22 +87,31 @@ if (cmd === "mcp") {
   } catch (e) {
     fail(2, (e as Error).message);
   }
-  // the device is held for the whole capture, so the Patchsprite app leaves it to the editor meanwhile
-  let held: ReturnType<typeof acquirePedalLock>;
+  // the device is held while the capture works, so the Patchsprite app leaves it to the editor meanwhile
+  let writer: CaptureWriter | undefined;
+  let hold: DeviceHold;
   try {
-    held = acquirePedalLock("sniffer capture");
+    hold = DeviceHold.take(process.env, (kind, text) => {
+      try {
+        writer?.write({ type: "event", t: Date.now(), kind, text });
+      } catch {} // a note the file can't take is not worth failing over
+    });
   } catch (e) {
-    fail(4, `The pedal lock: ${(e as Error).message}`);
+    const text = (e as Error).message;
+    const busy = text.startsWith("The device is in use");
+    fail(busy ? 3 : 4, busy ? text : `The pedal lock: ${text}`);
   }
-  if (!held!.ok) fail(3, `The device is in use: ${describePedalLock(held!.holder)}. Wait for it to finish, then try again.`);
-  const lock = (held! as Extract<typeof held, { ok: true }>).lock;
   process.on("exit", () => {
     try {
-      releasePedalLock(lock);
+      hold.release();
     } catch {} // a lock left behind is stale once this process is gone
   });
+  // the hold is renewed while the user changes things in the editor, never by its own polls (DeviceHold.heard)
+  const write = (r: CaptureRecord) => {
+    writer!.write(r);
+    if (r.type === "midi") hold.heard(r);
+  };
   const path = out ?? defaultCaptureName(header!);
-  let writer: CaptureWriter;
   try {
     writer = new CaptureWriter(path, header!);
   } catch (e) {
@@ -118,7 +128,7 @@ if (cmd === "mcp") {
     writer!.close();
     fail(4, `Could not reach Frida: ${(e as Error).message}`);
   }
-  const session = new CaptureSession({ device: device!, editorExe: editor!, attachDelayMs: delay * 1000, write: (r) => writer.write(r) });
+  const session = new CaptureSession({ device: device!, editorExe: editor!, attachDelayMs: delay * 1000, write });
   console.log(`Capturing to ${path}. Waiting for ${editor}; press Ctrl+C to stop.`);
   try {
     await session.run(stop.signal);

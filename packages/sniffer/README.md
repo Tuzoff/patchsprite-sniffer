@@ -13,12 +13,14 @@ node packages/sniffer/bin/sniff.ts capture --editor AcmeEdit.exe --attach-delay 
 ```
 
 `--editor` is the editor's executable file name as Task Manager shows it. Start the capture before or after the
-editor: it holds the device for Patchsprite (the app leaves it alone until the capture stops), waits for the editor, attaches `--attach-delay` seconds after it appears (attaching too early can leave an
+editor: it holds the device for Patchsprite (the app leaves it alone while the capture works), waits for the editor, attaches `--attach-delay` seconds after it appears (attaching too early can leave an
 editor's window blank), and attaches again if the editor restarts. Press Ctrl+C to stop. The capture goes to
 `capture-<time>-<id>.jsonl` in the current folder, or to `--out FILE`, and is never written over.
 
-The hold on the device is Patchsprite's pedal lock, which counts as stale after six hours. Keep a capture shorter
-than that: a longer one keeps recording, but the app could take the device meanwhile.
+The hold on the device is Patchsprite's pedal lock, and it is kept only while the capture works: each new message
+the editor sends (you changing something) renews it, and so does each step in a chat session. Its own polling doesn't.
+Left alone for 15 minutes, the capture lets the device go, and takes it back on your next change if nobody else has it
+by then. It keeps recording either way. A lock also lapses after six hours whatever happens.
 
 A capture can hold your device's own content, such as presets the editor read from it. Keep it to yourself: don't
 attach it to a public issue.
@@ -26,7 +28,7 @@ attach it to a public issue.
 ## Walk tools (`src/walk/`)
 
 The tools a model uses to walk the editor (S11), served by `sniff mcp` beside the capture tools. They work only while
-a capture runs: the capture names the editor, holds the pedal lock for the whole session and records what every
+a capture runs: the capture names the editor, holds the pedal lock while the session works and records what every
 input makes the editor send. They run on Windows; tests use a fake window host, so they run anywhere.
 
 - `editor_screenshot` (`shot.ts`, S14): the editor's own window only, never the desktop, because shots go to a model.
@@ -44,7 +46,13 @@ input makes the editor send. They run on Windows; tests use a fake window host, 
   front. A click on a control that UI Automation names like firmware, update, reset, store, delete or account is
   (or write, flash, install, overwrite or import) is refused unless the call says the user approved it (`hazardApproved`, that call only). Editors that draw their own
   controls hide their names, so the walk prompt's guardrails still apply there. Enter, space, delete and backspace
-  are checked the same way against the control that has the keyboard focus.
+  are checked the same way against the control that has the keyboard focus. While a standard file dialog is open,
+  input may only scroll, press Esc or click Cancel (the file name and Open or Save go through `fill_dialog`). While one
+  of the editor's dialogs shows a hazard button, a shortcut letter (with or without Alt) is refused, and so is typed
+  text outside a text box. A key or typed text that follows other input in the same call waits 600 ms first, so a
+  dialog that input opened is seen before anything is typed into it. In an open menu, shortcut letters and typed text are
+  refused (a letter picks an item unseen); arrows and Enter, which check the focused item's name
+  (an unnamed item is refused), or a click do the same.
 - `read_control` (`read.ts`): the control at a point, through Windows UI Automation (name, type, value, range,
   toggle state), where the editor exposes it.
 - `list_dialogs` and `fill_dialog` (`read.ts`): the editor's standard Open, Save As and Select Folder dialogs, which

@@ -102,6 +102,8 @@ export interface InputDeps {
   coveredTimeoutMs?: number;
   /** Wait between those tries, in ms (default 1 s). */
   retryMs?: number;
+  /** Wait before a key or typed text that follows other input, so a dialog that input opened shows first (default 600 ms). */
+  dialogSettleMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -126,7 +128,16 @@ export function toScreen(rect: Rect, scale: number, x: number, y: number): { x: 
 export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
   const scale = d.scale ?? 0.5;
   const sleep = d.sleep ?? wait;
+  const settle = d.dialogSettleMs ?? 600;
+  let afterInput = false;
   for (const [n, step] of steps.entries()) {
+    // A click or key may open a dialog, which takes a moment to show. Keys sent before then would queue up and land in
+    // it unchecked, so they wait for it to appear and be seen by the dialog check.
+    if (afterInput && (step.op === "key" || step.op === "type")) await sleep(settle);
+    // A wait step at least that long gives the dialog its time (a shorter one, such as wait:0, doesn't); a wheel step
+    // neither opens one nor gives it time.
+    if (step.op === "wait") afterInput &&= step.seconds * 1000 < settle;
+    else if (step.op !== "wheel") afterInput = true;
     if (step.op === "wait") {
       await sleep(step.seconds * 1000);
       continue;
@@ -137,6 +148,7 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
       await d.beforeInput();
       const win = await editorWindow(d.host, d.app);
       await d.host.front(win.hwnd);
+      await refuseDialogBypass(d, win, scale, step, n);
       if (!d.hazardApproved) {
         // A drag presses and releases like a click, so both its ends are checked too.
         if (step.op === "click" || step.op === "dclick" || step.op === "rclick" || step.op === "drag" || step.op === "slowdrag") await refuseHazard(d.host, win, scale, step, n);
@@ -146,6 +158,11 @@ export async function runSteps(d: InputDeps, steps: Step[]): Promise<void> {
         if (step.op === "key" && PRESS_KEYS.some((k) => codes.includes(k))) await refuseFocusedHazard(d.host, win.pid, `key:${step.combo}`, codes.includes(KEYS.enter), n);
         // A typed space presses a focused button too.
         if (step.op === "type" && step.text.includes(" ")) await refuseFocusedHazard(d.host, win.pid, "type", false, n);
+        // In an open menu a letter picks the item it underlines, unseen; arrows and Enter (checked above) or a click
+        // reach the same item with its name checked.
+        if ((step.op === "type" || (step.op === "key" && pressesLetter(codes))) && (await menuOpen(d.host, win.pid))) {
+          throw new InputError(`step ${n + 1} (${stepName(step)}) refused: a menu is open, and a letter there picks an item unseen. Click the item, or move to it with the arrow keys and press Enter`);
+        }
       }
       const res = await send(d.host, win, scale, step);
       if (res.done) break;
@@ -168,9 +185,65 @@ function refuseIfHazardName(name: string, what: string) {
   }
 }
 
+/** Buttons that only close a file dialog, which a click may press while one is open. */
+const CLOSE_BUTTON = /^(cancel|close|no)$/i;
+
+/** While one of the editor's standard file dialogs is open, its file name and its Open or Save button are fill_dialog's
+ * alone, which keeps a file inside the capture's folder and checks its extension: input may only scroll, press Esc
+ * or click Cancel. And an Alt shortcut presses a dialog's button unseen, so it is refused while any of the editor's dialogs
+ * shows a hazard button. */
+async function refuseDialogBypass(d: InputDeps, win: FoundWindow, scale: number, step: Exclude<Step, { op: "wait" }>, n: number) {
+  if (step.op === "wheel") return;
+  const { dialogs } = await d.host.dialogs(win.pid);
+  if (!dialogs.length) return;
+  const codes = step.op === "key" ? keyCodes(step.combo) : [];
+  if (dialogs.some((x) => x.fileBox)) {
+    // Esc alone only cancels.
+    if (codes.length === 1 && codes[0] === KEYS.esc) return;
+    if (step.op === "click") {
+      const p = toScreen(win.rect, scale, step.x, step.y);
+      const at = await d.host.element(win.pid, p.x, p.y);
+      if (at.found && at.element.controlType === "Button" && CLOSE_BUTTON.test(at.element.name.replace(/&/g, "").trim())) return;
+    }
+    throw new InputError(`step ${n + 1} (${step.op}) refused: a file dialog is open. Use fill_dialog for its file name and its Open or Save button; editor_input may only scroll, press Esc or click Cancel there`);
+  }
+  if (d.hazardApproved || (step.op !== "key" && step.op !== "type")) return;
+  const hazard = dialogs.flatMap((x) => x.buttons).find((b) => HAZARD.test(b));
+  if (!hazard) return;
+  // A dialog's mnemonic presses its button on Alt plus the letter, and on the bare letter too whenever the focus isn't
+  // in a text box; typed text is only safe inside one.
+  const mnemonic = step.op === "key" && (codes.includes(KEYS.alt) || pressesLetter(codes));
+  const typedOutsideBox = step.op === "type" && !(await focusedInTextBox(d.host, win.pid));
+  if (mnemonic || typedOutsideBox) {
+    throw new InputError(`step ${n + 1} (${stepName(step)}) refused: it can press the dialog's "${hazard}" button through its shortcut letter, which can update firmware, reset, store over or delete. Ask the user first; only with their say-so, repeat it with hazardApproved.`);
+  }
+}
+
+const isLetterOrDigit = (vk: number) => (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5a);
+
+/** A letter or digit without ctrl, which a menu or a dialog may take as a shortcut letter. */
+const pressesLetter = (codes: number[]) => !codes.includes(KEYS.ctrl) && codes.some(isLetterOrDigit);
+
+const stepName = (step: { op: "key"; combo: string } | { op: "type" }) => (step.op === "key" ? `key:${step.combo}` : "type");
+
+/** Whether the focus is in a menu (an open menu, or the menu bar after Alt), as UI Automation reports it. */
+async function menuOpen(host: WindowHost, pid: number): Promise<boolean> {
+  const at = await host.focused(pid);
+  return at.found && /^Menu(Item|Bar)?$/.test(at.element.controlType);
+}
+
+async function focusedInTextBox(host: WindowHost, pid: number): Promise<boolean> {
+  const at = await host.focused(pid);
+  return at.found && (at.element.controlType === "Edit" || at.element.controlType === "Document") && at.element.readOnly !== true;
+}
+
 async function refuseFocusedHazard(host: WindowHost, pid: number, what: string, enter: boolean, n: number) {
   const at = await host.focused(pid);
   refuseIfHazard(at, `step ${n + 1} (${what}) refused: the focused control is`);
+  // A menu item drawn by the editor itself often has no name, so what Enter would pick is unknown.
+  if (enter && at.found && at.element.controlType === "MenuItem" && !at.element.name.trim()) {
+    throw new InputError(`step ${n + 1} (${what}) refused: the focused menu item has no name, so what it does is unknown. Take a screenshot and ask the user; only with their say-so, repeat it with hazardApproved.`);
+  }
   // Enter in a dialog presses its default button, whichever control has the focus.
   if (enter && at.dialogHung) throw new InputError(`step ${n + 1} (${what}) refused: the dialog in front isn't answering, so what Enter would press is unknown. Take a screenshot and try again`);
   if (enter && at.defaultButton) refuseIfHazardName(at.defaultButton, `step ${n + 1} (${what}) refused: Enter would press the dialog's default button`);

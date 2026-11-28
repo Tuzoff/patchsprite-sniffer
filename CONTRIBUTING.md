@@ -33,6 +33,10 @@ The CLA applies to every part of this repository, including the shared engine pa
   changes). It fails until then; a maintainer will tell you if anything needs changing. A maintainer's comment line
   `Spec review: OK (sniffer)` or `Spec review: OK (scope)` adds that label (`withdrawn` instead of `OK` takes it off),
   one label at a time, so two reviews answering at once never drop each other's.
+- **`gate-approval`**: a pull request that changes how pull requests are checked or merged (anything under `.github/`
+  or `.claude/`, the check scripts in `scripts/`, `CLA.md`, `LICENSE`, and any `package.json`, `package-lock.json`,
+  `npm-shrinkwrap.json` or `.npmrc`) needs a maintainer's `gate-approved` label added
+  after its last push; every other pull request passes it at once. Only maintainers decide on these changes.
 
 Issue and pull request text is public, and only titles and bodies are checked, for the plans above; comments are not
 checked. Don't paste captures, SysEx dumps or vendor files into any of it. Use the sniffer's upload to share a

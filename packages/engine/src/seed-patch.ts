@@ -530,8 +530,19 @@ const PROBE_KEYS = new Set(["safeRead", "readBack"]);
 /** Keys of a MIDI channel control that say what it sends to: a changed one retargets every write through it. */
 const CONTROL_TARGET_KEYS = new Set(["type", "cc", "pc", "nrpn", "number", "msb", "lsb", "channel", "bits"]);
 
-/** Keys of a message that decide which bytes it sends: its cmd, its direction and its payload (inline or a layout's name). */
-const PIN_KEYS = ["cmd", "dir", "payload"];
+/**
+ * Keys of a message that decide which bytes it sends: its cmd, its direction, its payload (inline or a layout's name)
+ * and its header (on sysex-plain framing, two messages with one cmd under different headers are different messages).
+ */
+const PIN_KEYS = ["cmd", "dir", "payload", "header"];
+
+/** The shared layouts a layout's (or an inline payload's) packed tail is read with, or joined into as a piece. */
+function tailLayouts(layout: Json | undefined): string[] {
+  const packed = isObject(layout) ? layout.packed : undefined;
+  if (!isObject(packed)) return [];
+  const pieces = packed.pieces;
+  return [packed.layout, isObject(pieces) ? pieces.layout : undefined].filter((l): l is string => typeof l === "string");
+}
 
 /** The app's longest cmd, in bytes (`transport.inner.cmdLength`). A longer one can't load, so it is judged by nothing. */
 const MAX_CMD_TOKENS = 8;
@@ -582,8 +593,9 @@ const SEP = "\u0000";
 /**
  * Where a change may lift a block, as joined paths. A block is per message: the app lets a send share a blocked
  * message's cmd only while their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them
- * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir` and `payload` of every blocked
- * message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, and what a
+ * apart, so those pins are what keep the block standing. The pins are the `cmd`, `dir`, `payload` and `header` of every
+ * blocked message and of every send or request whose cmd can be a blocked one's, the layouts their payloads name, the
+ * layouts those payloads' packed tails are read with (whose consts pin bytes and whose fields set lengths), and what a
  * mode stands in for any of them. A firmware delta's paths are matched without their `/firmwares/<fw>` prefix.
  *
  * A reviewer may accept any subset of a patch's changes, so each message counts with every cmd, direction and payload
@@ -591,6 +603,8 @@ const SEP = "\u0000";
  */
 function blockPins(maps: readonly Json[]): Set<string> {
   const seen = new Map<string, Record<string, Json>[]>();
+  // every version of each layout, for the packed tails a named payload reads with
+  const layouts = new Map<string, Json[]>();
   const blocked = new Set<string>();
   // what stands in for a message or layout in some mode; one mapped to itself doesn't
   const stand = { messages: new Map<string, Set<string>>(), layouts: new Map<string, Set<string>>() };
@@ -604,6 +618,13 @@ function blockPins(maps: readonly Json[]): Set<string> {
           const list = seen.get(n);
           if (list) list.push(m);
           else seen.set(n, [m]);
+        }
+    for (const table of [at(map, ["layouts"]), ...deltas.map((d) => at(d, ["layouts"]))])
+      if (isObject(table))
+        for (const [n, l] of Object.entries(table)) {
+          const list = layouts.get(n);
+          if (list) list.push(l);
+          else layouts.set(n, [l]);
         }
     for (const list of [at(map, ["blocked"]), ...deltas.map((d) => at(d, ["blocked"]))])
       if (Array.isArray(list)) for (const b of list) if (typeof b === "string") blocked.add(b);
@@ -630,8 +651,15 @@ function blockPins(maps: readonly Json[]): Set<string> {
   const pin = (n: string) => {
     for (const k of PIN_KEYS) out.add(["messages", n, k].join(SEP));
     // by name, whether or not a view has the layout: adding the layout a pinned payload names is a pin change too
-    for (const m of seen.get(n) ?? [])
-      if (typeof m.payload === "string") for (const l of [m.payload, ...standIns("layouts", m.payload)]) out.add(["layouts", l].join(SEP));
+    const named = (l: string) => {
+      for (const x of [l, ...standIns("layouts", l)]) out.add(["layouts", x].join(SEP));
+    };
+    for (const m of seen.get(n) ?? []) {
+      // the layout a payload names, or the payload itself, and the layouts their packed tails read with
+      const own = typeof m.payload === "string" ? [m.payload, ...standIns("layouts", m.payload)] : undefined;
+      for (const l of own ?? []) named(l);
+      for (const shape of own ? own.flatMap((l) => layouts.get(l) ?? []) : [m.payload]) for (const t of tailLayouts(shape)) named(t);
+    }
   };
   for (const b of blocked) pin(b);
   for (const [n, ms] of seen) {
@@ -657,6 +685,154 @@ function writesPin(segs: readonly string[], pins: Set<string>, above: Set<string
   const own = segs[0] === "firmwares" ? segs.slice(2) : segs;
   for (let i = 1; i <= own.length; i++) if (pins.has(own.slice(0, i).join(SEP))) return true;
   return above.has(own.join(SEP));
+}
+
+const LIFT_BLOCK = "may lift a block";
+
+/**
+ * A send or request kept apart from a blocked message on a cmd they can share, and what keeps them apart ("byte 4: 08
+ * vs 01", "length: 1 vs 2 or more"), as a caller's map checks work it out. A firmware is named only for a pair that is
+ * new there or rests on something else, and a mode only for a pair its stand-ins make new or move (in the base map, or
+ * in `firmware`'s view of it).
+ */
+export interface BlockSeparation {
+  firmware?: string;
+  mode?: string;
+  send: string;
+  blocked: string;
+  by: string;
+}
+
+export interface ReviewOptions {
+  /**
+   * Optional: the block separations of a map, from the caller's own map checks. With it, a change that may lift a
+   * block says which pair it touches and how their separation changes when the change is accepted. It may throw (or
+   * return something else) when a map doesn't load; the reason then stays the plain one.
+   */
+  separations?: (map: unknown) => readonly BlockSeparation[];
+}
+
+/** At most this many changes are weighed alone against their separations; the rest keep the plain reason. */
+const MAX_WEIGHED_ALONE = 64;
+
+/** At most this many separation notes per change; the rest are counted. */
+const MAX_SEPARATION_NOTES = 8;
+
+/**
+ * The messages an op at `segs` touches by name: a message, every message whose payload names a layout it touches or
+ * reads its packed tail with one, all of them for a whole section or firmware delta, and what a mode puts in or takes
+ * the place of any of those.
+ */
+function touchedMessages(segs: readonly string[], maps: readonly Json[]): Set<string> {
+  const own = segs[0] === "firmwares" ? (segs.length <= 2 ? ["messages"] : segs.slice(2)) : segs;
+  const sections = (key: string) =>
+    maps.flatMap((m) => {
+      const firmwares = at(m, ["firmwares"]);
+      return [at(m, [key]), ...(isObject(firmwares) ? Object.values(firmwares).map((d) => at(d, [key])) : [])].filter(isObject);
+    });
+  const tables = sections("messages");
+  // mode stand-ins both ways: [kind, name, stand-in]
+  const swaps = maps.flatMap((m) => {
+    const use = at(m, ["modes", "use"]);
+    return (isObject(use) ? Object.values(use) : []).flatMap((u) =>
+      (["messages", "layouts"] as const).flatMap((kind) => {
+        const t = isObject(u) ? u[kind] : undefined;
+        return isObject(t) ? Object.entries(t).flatMap(([n, v]) => (typeof v === "string" ? [[kind, n, v] as const] : [])) : [];
+      }),
+    );
+  });
+  const alike = (kind: "messages" | "layouts", name: string) =>
+    new Set([name, ...swaps.flatMap(([k, n, v]) => (k !== kind ? [] : n === name ? [v] : v === name ? [n] : []))]);
+  const out = new Set<string>();
+  if (own[0] === "messages") {
+    if (own.length >= 2) for (const n of alike("messages", own[1])) out.add(n);
+    else for (const t of tables) for (const n of Object.keys(t)) out.add(n);
+  } else if (own[0] === "layouts") {
+    const layouts = own.length >= 2 ? alike("layouts", own[1]) : undefined;
+    const shared = sections("layouts");
+    // the layouts a payload reads: the one it names (and what stands in for it), and their packed tails' or its own
+    const reads = (payload: Json | undefined): string[] => {
+      if (typeof payload !== "string") return tailLayouts(payload);
+      const named = [...alike("layouts", payload)];
+      return [...named, ...named.flatMap((l) => shared.flatMap((t) => tailLayouts(Object.hasOwn(t, l) ? t[l] : undefined)))];
+    };
+    for (const t of tables)
+      for (const [n, m] of Object.entries(t)) {
+        const r = isObject(m) ? reads(m.payload) : [];
+        if (r.length && (!layouts || r.some((l) => layouts.has(l)))) for (const x of alike("messages", n)) out.add(x);
+      }
+  }
+  return out;
+}
+
+/** A name or separation from the caller, as it goes into reason text: one line, no control or direction marks, bounded. */
+const shown = (s: string, max = 80): string => {
+  const t = s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "?");
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+};
+
+/**
+ * The separations before and after a change, as notes for the messages it touches: a pair that is new
+ * means the patch puts a send beside a blocked message, a changed `by` means a separation moved, a pair that is gone
+ * means the send no longer shares the cmd (or no longer loads beside it), and an unchanged pair says what still keeps
+ * them apart. A pair named on a firmware is compared with the unnamed one where the other map doesn't name it there,
+ * since an unnamed pair holds on every firmware that doesn't say otherwise; a pair named in a mode likewise with the
+ * pair the caller leaves it unnamed for (on a firmware, that firmware's pair first, then the base map's in that mode,
+ * then the base map's). The base map's and the whole patch's separations are asked for once. Undefined when the base map's,
+ * the whole patch's or `map`'s separations can't be had: a change that is fine alone may still leave nothing between a
+ * send and a blocked message beside the rest.
+ */
+function separationNotes(separations: NonNullable<ReviewOptions["separations"]>, base: unknown, patched: unknown): (map: unknown, names: Set<string>) => string[] | undefined {
+  const key = (s: { firmware?: string; mode?: string; send: string; blocked: string }) => [s.firmware ?? "", s.mode ?? "", s.send, s.blocked].join(SEP);
+  const ok = (s: unknown): s is BlockSeparation =>
+    isObject(s) &&
+    typeof s.send === "string" &&
+    typeof s.blocked === "string" &&
+    typeof s.by === "string" &&
+    (s.firmware === undefined || typeof s.firmware === "string") &&
+    (s.mode === undefined || typeof s.mode === "string");
+  const table = (map: unknown): Map<string, BlockSeparation> | undefined => {
+    try {
+      const list: unknown = separations(map);
+      return Array.isArray(list) && list.every(ok) ? new Map(list.map((s) => [key(s), s])) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const was = table(base);
+  const whole = was && table(patched);
+  // a pair a firmware doesn't name holds as in the base map, and one a mode doesn't name as without the mode; a
+  // firmware's pair in a mode the caller doesn't name holds as that firmware's pair where the firmware names one (it
+  // moves the pair), else as the base map's in that mode
+  const find = (t: Map<string, BlockSeparation>, s: BlockSeparation) => {
+    const { send, blocked } = s;
+    const views = [s, ...(s.mode && s.firmware ? [{ firmware: s.firmware }, { mode: s.mode }] : []), ...(s.mode || s.firmware ? [{}] : [])];
+    for (const v of views) {
+      const hit = t.get(key({ ...v, send, blocked }));
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  const on = (s: BlockSeparation) => `${s.mode ? ` in mode ${shown(s.mode)}` : ""}${s.firmware ? ` on ${shown(s.firmware)}` : ""}`;
+  return (map, names) => {
+    const now = map === patched ? whole : whole && table(map);
+    if (!was || !now) return undefined;
+    const notes: string[] = [];
+    for (const k of new Set([...was.keys(), ...now.keys()])) {
+      const s = (now.get(k) ?? was.get(k))!;
+      if (!names.has(s.send) && !names.has(s.blocked)) continue;
+      const a = find(was, s);
+      const b = find(now, s);
+      const [send, blocked] = [shown(s.send), shown(s.blocked)];
+      notes.push(
+        !a ? `${send} now shares a cmd with the blocked ${blocked}${on(s)}, kept apart only by ${shown(b!.by)}`
+        : !b ? `${send} no longer shares a cmd with the blocked ${blocked}${on(s)} (was kept apart by ${shown(a.by)})`
+        : a.by !== b.by ? `what keeps ${send} apart from the blocked ${blocked}${on(s)} moves from ${shown(a.by)} to ${shown(b.by)}`
+        : `${send} is kept apart from the blocked ${blocked}${on(s)} by ${shown(b.by)}`,
+      );
+    }
+    return notes;
+  };
 }
 
 /** Keys anywhere inside a value. */
@@ -686,14 +862,29 @@ const makesSend = (v: unknown, last: string | undefined): boolean => (last === "
 const isMeasured = (v: unknown): boolean =>
   isObject(v) && typeof v.value === "number" && Object.keys(v).every((k) => ["value", "unit", "measuredOn", "date", "source"].includes(k));
 
-export function reviewReasons(p: SeedPatch, base: unknown): { change: string; reason: string }[] {
+const HOST_REASON = "changes which port, USB unit or vendor app the map looks for";
+
+export function reviewReasons(p: SeedPatch, base: unknown, opts: ReviewOptions = {}): { change: string; reason: string }[] {
   const out: { change: string; reason: string }[] = [];
+  const patched = applySeedPatch(base, p).map;
   // the pins as the base map has them and as the whole patch leaves them, so a change that brings a send onto a
   // blocked cmd, or a block onto a send's cmd, counts as well as one that edits a pin in place, whatever subset is accepted
-  const pins = blockPins([base as Json, applySeedPatch(base, p).map as Json]);
+  const pins = blockPins([base as Json, patched as Json]);
   const above = abovePins(pins);
+  // separations load a map, so they're asked for only once a change writes a pin. A change's notes weigh the change
+  // accepted alone, since a reviewer may turn the rest down; one that doesn't apply alone is weighed with the whole patch.
+  // Past MAX_WEIGHED_ALONE changes the rest keep the plain reason, so a patch can't make the review load a map per change
+  let separated: ReturnType<typeof separationNotes> | undefined;
+  let weighed = 0;
+  const notesFor = (c: Change, names: Set<string>) => {
+    if (!opts.separations || weighed++ >= MAX_WEIGHED_ALONE) return [];
+    separated ??= separationNotes(opts.separations, base, patched);
+    const alone = p.changes.length > 1 ? applySeedPatch(base, p, new Set([c.id])) : undefined;
+    return separated(alone?.results.find((r) => r.change === c.id)?.status === "applied" ? alone.map : patched, names) ?? [];
+  };
   for (const c of p.changes) {
     const reasons = new Set<string>();
+    const lifted = new Set<string>();
     const measured = parseEntry(c.entry)?.kind === "measured";
     if (c.action === "remove") reasons.add("removes an entry");
     for (const op of c.ops ?? []) {
@@ -708,7 +899,10 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const keys = new Set([...segs, ...put, ...keysIn(old), ...keysIn(covered)]);
       const any = (set: Set<string>) => [...keys].some((k) => set.has(k));
       if (any(SAFETY_KEYS)) reasons.add("changes safety rules, blocked lists or hazards");
-      if (writesPin(segs, pins, above)) reasons.add("may lift a block: changes what tells a blocked message from a send on its cmd");
+      if (writesPin(segs, pins, above)) {
+        reasons.add(LIFT_BLOCK);
+        for (const n of touchedMessages(segs, [base as Json, patched as Json])) lifted.add(n);
+      }
       if (any(WRITE_RANGE_KEYS)) reasons.add("changes what may be written");
       if (any(PROBE_KEYS)) reasons.add("changes what is probed or what verifies a write");
       if (!KNOWN_TOP.has(segs[0])) reasons.add("changes a map section this engine doesn't know");
@@ -716,6 +910,12 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       const onlyTiming = measured && ("value" in op ? isMeasured(op.value) : true) && (old === undefined || isMeasured(old));
       if ((segs[0] === "transport" || segs[0] === "addresses") && !onlyTiming) reasons.add("changes the framing of every message");
       if (segs[0] === "session") reasons.add("changes what is sent on every connect");
+      // the identity decides which unit the map drives at all, whatever the change's evidence
+      if (segs[0] === "identity") reasons.add("changes which unit the map drives (its identity)");
+      // the driver picks the code that runs the unit; the host, which port, USB unit and vendor apps the map looks for
+      // (a measured value there is only a timing, exempt as in the framing)
+      if (segs[0] === "driver") reasons.add("changes which driver runs the unit");
+      if (segs[0] === "host" && !onlyTiming) reasons.add(HOST_REASON);
       if (segs[0] === "modes") reasons.add("changes which entries a mode uses");
       if (segs[0] === "controls" && (segs.length < 3 || any(CONTROL_TARGET_KEYS))) reasons.add("may change what a control sends to");
       const last = segs.at(-1);
@@ -725,7 +925,12 @@ export function reviewReasons(p: SeedPatch, base: unknown): { change: string; re
       // that drives a sniffer walk
       if (keys.has("agentNotes") || segs[0] === "cautions" || (keys.has("safety") && keys.has("notes"))) reasons.add("changes text a chat model reads");
     }
-    for (const reason of reasons) out.push({ change: c.id, reason });
+    // the separation notes stand where the plain reason would, at most MAX_SEPARATION_NOTES of them for the change
+    const notes = reasons.has(LIFT_BLOCK) ? notesFor(c, lifted) : [];
+    const lift = !notes.length
+      ? [`${LIFT_BLOCK}: changes what tells a blocked message from a send on its cmd`]
+      : [...notes.slice(0, MAX_SEPARATION_NOTES), ...(notes.length > MAX_SEPARATION_NOTES ? [`and ${notes.length - MAX_SEPARATION_NOTES} more pairs`] : [])].map((n) => `${LIFT_BLOCK}: ${n}`);
+    for (const reason of reasons) for (const r of reason === LIFT_BLOCK ? lift : [reason]) out.push({ change: c.id, reason: r });
   }
   return out;
 }

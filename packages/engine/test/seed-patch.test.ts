@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { schemaFiles } from "../../../scripts/schemas.ts";
 import { fingerprint } from "../src/canonical-json.ts";
-import { MAX_PATCH_BYTES, UNKNOWN_FIRMWARE, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
+import { MAX_PATCH_BYTES, UNKNOWN_FIRMWARE, applySeedPatch, entryPaths, hasEntry, parseEntry, parseSeedPatch, reviewReasons, type BlockSeparation, type Change, type Evidence, type SeedPatch } from "../src/seed-patch.ts";
 
 const fixture = (name: string) => readFileSync(new URL(`../../../test/fixtures/seed-patch/${name}`, import.meta.url), "utf8");
 const seed = () => JSON.parse(fixture("acme-fx-1.seed.json"));
@@ -207,10 +207,29 @@ test("review reasons come from the ops and the base map, not from the producer",
   assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/payload/fields/1/allowed", value: [0, 1, 2], was: fingerprint([0, 1]) })), ["changes what may be written"]);
   assert.deepEqual(reasons(edit("transport", { op: "replace", path: "/transport/endian", value: "be", was: fingerprint("le") })), ["changes the framing of every message"]);
   assert.deepEqual(reasons(edit("session", { op: "add", path: "/session", value: { onConnect: ["editMode"] } })), ["changes what is sent on every connect"]);
+  // any change to the identity, even only a better source for it
+  assert.deepEqual(reasons(edit("identity", { op: "add", path: "/identity", value: { manufacturer: "7d", family: "01 02" } })), ["changes which unit the map drives (its identity)"]);
+  const withIdentity = { ...base, identity: { manufacturer: "7d", family: "01 02", source: { kind: "community-table", ref: "x" } } };
+  const betterSource = edit("identity", { op: "replace", path: "/identity/source", value: { kind: "capture", ref: "y" }, was: fingerprint({ kind: "community-table", ref: "x" }) });
+  assert.deepEqual(reviewReasons(withChanges(betterSource), withIdentity).map((r) => r.reason), ["changes which unit the map drives (its identity)"]);
+  // a measured value there isn't exempt the way a timing in the framing is
+  const timing = { value: 5, unit: "ms", measuredOn: "acme fx-1", date: "2026-11-24", source: "sniffer-capture" };
+  assert.deepEqual(reasons({ ...edit("measured/identity.replyMs", { op: "add", path: "/identity/replyMs", value: timing }), action: "add" }), ["changes which unit the map drives (its identity)"]);
   assert.deepEqual(reasons(edit("getPreset", { op: "add", path: "/messages/getPreset/agentNotes", value: "say it kindly" })), ["changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("safety", { op: "add", path: "/safety/notes", value: ["press nothing"] })), ["changes safety rules, blocked lists or hazards", "changes text a chat model reads"]);
   assert.deepEqual(reasons(edit("cautions", { op: "add", path: "/cautions", value: ["the editor must be closed"] })), ["changes text a chat model reads"]);
-  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/x", value: { safety: { rules: [] } } })), ["changes safety rules, blocked lists or hazards", "changes which port, USB unit or vendor app the map looks for"]);
+  // the driver and the host: any change, whole or in part
+  assert.deepEqual(reasons(edit("driver", { op: "add", path: "/driver", value: "control-only" })), ["changes which driver runs the unit"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host", value: { midiPort: "Acme FX" } })), ["changes which port, USB unit or vendor app the map looks for"]);
+  assert.deepEqual(reasons(edit("host", { op: "add", path: "/host/midiPort", value: "Acme FX 2" })), ["changes which port, USB unit or vendor app the map looks for"]);
+  const withHost = { ...base, driver: "control-only", host: { midiPort: "Acme FX" } };
+  const hostReasons = (c: Change) => reviewReasons(withChanges(c), withHost).map((r) => r.reason);
+  assert.deepEqual(hostReasons(edit("host", { op: "replace", path: "/host/midiPort", value: "Acme FX 2", was: fingerprint("Acme FX") })), ["changes which port, USB unit or vendor app the map looks for"]);
+  assert.deepEqual(hostReasons(edit("driver", { op: "remove", path: "/driver", was: fingerprint("control-only") })), ["changes which driver runs the unit"]);
+  // a measured timing there is exempt, as in the framing; a timing that replaces something else isn't
+  assert.deepEqual(hostReasons({ ...edit("measured/host.attachMs", { op: "add", path: "/host/attachMs", value: timing }), action: "add" }), []);
+  assert.deepEqual(hostReasons(edit("measured/host.midiPort", { op: "replace", path: "/host/midiPort", value: timing, was: fingerprint("Acme FX") })), ["changes which port, USB unit or vendor app the map looks for"]);
 
   // a limit dropped by replacing its parent: the base map shows what went
   const payload = base.messages.setPreset.payload;
@@ -286,6 +305,34 @@ test("a change that could lift a block goes to review: the pins that tell a bloc
   const modedReasons = (c: Change) => reviewReasons(withChanges(c), moded).map((r) => r.reason);
   assert.deepEqual(modedReasons(edit("layout/sceneBass", { op: "replace", path: "/layouts/sceneBass/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
   assert.deepEqual(modedReasons(edit("factoryResetBass", { op: "replace", path: "/messages/factoryResetBass/cmd", value: "7d", was: fingerprint("7e") })), [LIFT]);
+
+  // a pinned message's header, and the layout a packed tail reads with, through a named layout or an inline payload (#42)
+  const packed = structuredClone(base);
+  packed.layouts.record = { fields: [{ name: "kind", type: "u8", const: 2 }, { name: "slot", type: "u8" }] };
+  packed.layouts.recordBass = structuredClone(packed.layouts.record);
+  packed.layouts.scene = { packed: { packing: "7bit", layout: "record" } };
+  packed.layouts.chunk = { fields: [{ name: "at", type: "u8" }] };
+  packed.messages.storeChunk = { cmd: "7f", dir: "send", header: "edit", payload: { packed: { packing: "7bit", pieces: { layout: "chunk" } } } };
+  packed.modes = { use: { bass: { layouts: { record: "recordBass" } } } };
+  const packedReasons = (c: Change) => reviewReasons(withChanges(c), packed).map((r) => r.reason);
+  assert.deepEqual(packedReasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/header", value: "other" })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("storeChunk", { op: "replace", path: "/messages/storeChunk/header", value: "other", was: fingerprint("edit") })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/record", { op: "replace", path: "/layouts/record/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/recordBass", { op: "replace", path: "/layouts/recordBass/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  assert.deepEqual(packedReasons(edit("layout/chunk", { op: "add", path: "/layouts/chunk/fields/1", value: { name: "more", type: "u8" } })), [LIFT]);
+  // a header on a message away from the block's cmd is still no reason
+  assert.deepEqual(packedReasons(edit("nameReply", { op: "add", path: "/messages/nameReply/header", value: "edit" })), []);
+  // a firmware's delta of a tail layout, and the tail of a layout a mode puts in place of a pinned payload
+  assert.deepEqual(packedReasons(edit("layout/record", { op: "add", path: "/firmwares/1.20/layouts/record", value: { fields: [] } })), [LIFT]);
+  packed.modes.use.live = { layouts: { scene: "sceneLive" } };
+  packed.layouts.sceneLive = { packed: { packing: "7bit", layout: "liveRecord" } };
+  packed.layouts.liveRecord = structuredClone(packed.layouts.record);
+  assert.deepEqual(packedReasons(edit("layout/liveRecord", { op: "replace", path: "/layouts/liveRecord/fields/0/const", value: 1, was: fingerprint(2) })), [LIFT]);
+  // a tail layout only an unpinned message reads is no reason
+  packed.layouts.other = { packed: { packing: "7bit", layout: "loose" } };
+  packed.layouts.loose = structuredClone(packed.layouts.record);
+  packed.messages.setOther = { cmd: "30", dir: "send", payload: "other" };
+  assert.deepEqual(packedReasons(edit("layout/loose", { op: "replace", path: "/layouts/loose/fields/0/const", value: 1, was: fingerprint(2) })), []);
 
   // away from the block's cmd, a payload or cmd repair is still not a review reason
   assert.deepEqual(reasons(rename), []);
@@ -622,4 +669,176 @@ test("a slot pedal's parameters are keyed by effect type: param/<type>/<id> find
   // a parameter's default is checked at load against its limits; changing it is no write-limit change
   const reset: Change = { id: "r", entry: "param/fuzz/1", action: "repair", source: "wire", ops: [{ op: "replace", path: "/parameters/groups/drives/params/sustain/default", value: 40, was: fingerprint(50) }], evidence: [capture] };
   assert.deepEqual(reviewReasons(patch(map, reset), map), []);
+});
+
+test("with block separations from the caller, a change that may lift a block names the pair and what keeps them apart", () => {
+  const pin = (v: number) => ({ fields: [{ name: "magic", type: "u8", const: v }] });
+  const base = seed();
+  Object.assign(base.messages, { factoryReset: { cmd: "7f", dir: "send", payload: pin(1) }, storeScene: { cmd: "7f", dir: "send", payload: "scene" } });
+  base.layouts = { scene: { size: 2, fields: [{ name: "magic", type: "u8", const: 2 }, { name: "slot", type: "u8" }] } };
+  base.blocked = ["factoryReset"];
+  // a stand-in for the app's blockSeparations: sends on a blocked cmd, told apart by their first byte's const
+  const first = (m: any, map: any) => {
+    const l = typeof m.payload === "string" ? map.layouts[m.payload] : m.payload;
+    const c = l?.fields?.[0]?.const;
+    return c === undefined ? "any" : c.toString(16).padStart(2, "0");
+  };
+  const separations = (map: any): BlockSeparation[] =>
+    (map.blocked ?? []).flatMap((b: string) =>
+      Object.entries(map.messages)
+        .filter(([n, m]: [string, any]) => n !== b && m.dir === "send" && m.cmd === map.messages[b].cmd)
+        .map(([n, m]) => ({ send: n, blocked: b, by: `byte 0: ${first(m, map)} vs ${first(map.messages[b], map)}` })),
+    );
+  const edit = (entry: string, ...ops: NonNullable<Change["ops"]>): Change => ({ id: "c", entry, action: "repair", source: "wire", ops, evidence: [capture] });
+  const reasons = (c: Change, sep: (m: unknown) => readonly BlockSeparation[] = separations) =>
+    reviewReasons(withChanges(c), base, { separations: sep }).map((r) => r.reason);
+
+  assert.deepEqual(reasons(edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 3, was: fingerprint(2) })), [
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset moves from byte 0: 02 vs 01 to byte 0: 03 vs 01",
+  ]);
+  assert.deepEqual(reasons(edit("setBypass", { op: "replace", path: "/messages/setBypass/cmd", value: "7f", was: fingerprint("22") })), [
+    "may lift a block: setBypass now shares a cmd with the blocked factoryReset, kept apart only by byte 0: any vs 01",
+  ]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "replace", path: "/messages/storeScene/cmd", value: "7e", was: fingerprint("7f") })), [
+    "may lift a block: storeScene no longer shares a cmd with the blocked factoryReset (was kept apart by byte 0: 02 vs 01)",
+  ]);
+  assert.deepEqual(reasons(edit("storeScene", { op: "add", path: "/messages/storeScene/agentNotes", value: "x" })), ["changes text a chat model reads"], "no pin, no note");
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 })), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+  ]);
+  // a map the app can't load: the plain reason
+  const fails = () => {
+    throw new Error("does not load");
+  };
+  assert.deepEqual(reasons(edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 3, was: fingerprint(2) }), fails), [
+    "may lift a block: changes what tells a blocked message from a send on its cmd",
+  ]);
+  // and so does one that hands back something else, and the app is asked only once a change writes a pin
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), () => [{ send: 1 }] as any), [
+    "may lift a block: changes what tells a blocked message from a send on its cmd",
+  ]);
+  let calls = 0;
+  reasons(edit("storeScene", { op: "add", path: "/messages/storeScene/agentNotes", value: "x" }), (m) => (calls++, separations(m)));
+  assert.equal(calls, 0);
+
+  // a firmware's own pair is weighed against the pair every firmware has, and a whole delta touches every message in it
+  const onFw = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    ...(map.firmwares?.["2.0"] ? [{ firmware: "2.0", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" }] : []),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/firmwares/2.0", value: { messages: {} } }), onFw).filter((r) => r.startsWith("may lift a block")), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset on 2.0 moves from byte 0: 02 vs 01 to byte 1: 05 vs 00",
+  ]);
+
+  // a mode's own pair is weighed against the pair of the view without the mode, not taken for the base pair
+  const inMode = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    ...(map.firmwares?.["2.0"] ? [{ firmware: "2.0", mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" }] : []),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/firmwares/2.0", value: { messages: {} } }), inMode).filter((r) => r.startsWith("may lift a block")), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 0: 02 vs 01 to byte 1: 05 vs 00",
+  ]);
+  // a mode pair on both sides is compared with itself, not with the base pair
+  const modePair = (map: any): BlockSeparation[] => [...separations(map), { mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" }];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modePair), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+  ]);
+  // a mode's pair on a firmware falls back to that firmware's pair before the base pair
+  const onFwPair = { firmware: "2.0", send: "storeScene", blocked: "factoryReset", by: "byte 2: 07 vs 00" };
+  const modeOnFw = (map: any): BlockSeparation[] => [
+    ...separations(map),
+    onFwPair,
+    ...(map === base ? [] : [{ ...onFwPair, mode: "live", by: "byte 1: 05 vs 00" }]),
+  ];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeOnFw), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: what keeps storeScene apart from the blocked factoryReset in mode live on 2.0 moves from byte 2: 07 vs 00 to byte 1: 05 vs 00",
+  ]);
+  // a firmware that moves a pair, and a mode that moves it in the base map only: unnamed on that firmware in that
+  // mode, the pair holds as the firmware's, not as the base map's in that mode
+  const inModeAll = { mode: "live", send: "storeScene", blocked: "factoryReset", by: "byte 1: 05 vs 00" };
+  const fwFirst = (map: any): BlockSeparation[] => [...separations(map), onFwPair, inModeAll, ...(map === base ? [] : [{ ...onFwPair, mode: "live" }])];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), fwFirst), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset on 2.0 by byte 2: 07 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live on 2.0 by byte 2: 07 vs 00",
+  ]);
+  // a firmware that doesn't move the pair: unnamed there in a mode, it holds as the base map's in that mode
+  const modeNext = (map: any): BlockSeparation[] => [...separations(map), inModeAll, ...(map === base ? [] : [{ ...inModeAll, firmware: "2.0" }])];
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), modeNext), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live by byte 1: 05 vs 00",
+    "may lift a block: storeScene is kept apart from the blocked factoryReset in mode live on 2.0 by byte 1: 05 vs 00",
+  ]);
+  // a mode that isn't a string is something else: the plain reason
+  assert.deepEqual(reasons(edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }), () => [{ mode: 1, send: "storeScene", blocked: "factoryReset", by: "x" }] as any), [
+    "may lift a block: changes what tells a blocked message from a send on its cmd",
+  ]);
+
+  // a layout a mode puts in place of a pinned one touches the messages whose payload it stands in for
+  base.modes = { ...base.modes, use: { ...base.modes?.use, live: { layouts: { scene: "sceneLive" } } } };
+  base.layouts.sceneLive = { size: 2, fields: [{ name: "magic", type: "u8", const: 4 }, { name: "slot", type: "u8" }] };
+  assert.deepEqual(reasons(edit("layout/sceneLive", { op: "replace", path: "/layouts/sceneLive/fields/0/const", value: 5, was: fingerprint(4) })), [
+    "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+  ]);
+
+  // a layout a packed tail reads with touches the messages that read it, through a named layout or an inline payload
+  const tailed = structuredClone(base);
+  tailed.layouts.record = { fields: [{ name: "slot", type: "u8" }] };
+  tailed.layouts.scene.packed = { packing: "7bit", layout: "record" };
+  tailed.messages.factoryReset.payload.packed = { packing: "7bit", pieces: { layout: "chunk" } };
+  tailed.layouts.chunk = { fields: [{ name: "at", type: "u8" }] };
+  const tailReasons = (c: Change) => reviewReasons(withChanges(c), tailed, { separations }).map((r) => r.reason);
+  for (const l of ["record", "chunk"])
+    assert.deepEqual(tailReasons(edit(`layout/${l}`, { op: "add", path: `/layouts/${l}/maxSize`, value: 4 })), [
+      "may lift a block: storeScene is kept apart from the blocked factoryReset by byte 0: 02 vs 01",
+    ]);
+
+  // at most eight notes for a change, however many of its ops write pins; names from the app go in on one line
+  const many = (map: any): BlockSeparation[] => ["a\nb", ...Array.from({ length: 10 }, (_, i) => `s${i}`)].map((send) => ({ send, blocked: "factoryReset", by: "x" }));
+  const lifts = reasons(
+    edit("factoryReset", { op: "add", path: "/messages/factoryReset/payload/minSize", value: 1 }, { op: "add", path: "/messages/factoryReset/payload/maxSize", value: 4 }),
+    many,
+  ).filter((r) => r.startsWith("may lift a block"));
+  assert.equal(lifts.length, 9);
+  assert.equal(lifts[0], "may lift a block: a?b is kept apart from the blocked factoryReset by x");
+  assert.equal(lifts[8], "may lift a block: and 3 more pairs");
+
+  // a change's notes weigh it accepted alone: here the two together keep the pair apart, but the layout edit alone
+  // leaves nothing between them, a map that doesn't load, so it keeps the plain reason
+  const strict = (map: any) => {
+    const list = separations(map);
+    if (list.some((s) => /(\w+) vs \1$/.test(s.by))) throw new Error("a send matches a blocked message");
+    return list;
+  };
+  const both = withChanges(
+    { ...edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 1, was: fingerprint(2) }), id: "a" },
+    { ...edit("factoryReset", { op: "replace", path: "/messages/factoryReset/payload/fields/0/const", value: 5, was: fingerprint(1) }), id: "b" },
+  );
+  assert.deepEqual(reviewReasons(both, base, { separations: strict }), [
+    { change: "a", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+    { change: "b", reason: "may lift a block: what keeps storeScene apart from the blocked factoryReset moves from byte 0: 02 vs 01 to byte 0: 02 vs 05" },
+  ]);
+  // and each fine alone but nothing between them together: the whole patch doesn't load, so both keep the plain reason
+  const clash = withChanges(
+    { ...edit("layout/scene", { op: "replace", path: "/layouts/scene/fields/0/const", value: 5, was: fingerprint(2) }), id: "a" },
+    { ...edit("factoryReset", { op: "replace", path: "/messages/factoryReset/payload/fields/0/const", value: 5, was: fingerprint(1) }), id: "b" },
+  );
+  assert.deepEqual(reviewReasons(clash, base, { separations: strict }), [
+    { change: "a", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+    { change: "b", reason: "may lift a block: changes what tells a blocked message from a send on its cmd" },
+  ]);
+  // a patch can't make the review load a map per change: past 64 such changes the rest keep the plain reason
+  const lots = withChanges(
+    ...Array.from({ length: 70 }, (_, i) => ({ ...edit("factoryReset", { op: "add", path: `/messages/factoryReset/payload/x${i}`, value: 1 }), id: `c${i}` })),
+  );
+  calls = 0;
+  const plain = reviewReasons(lots, base, { separations: (m) => (calls++, separations(m)) }).filter((r) => r.reason === "may lift a block: changes what tells a blocked message from a send on its cmd");
+  assert.deepEqual(plain.map((r) => r.change), ["c64", "c65", "c66", "c67", "c68", "c69"]);
+  assert.equal(calls, 66);
 });
