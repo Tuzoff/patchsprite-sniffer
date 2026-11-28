@@ -7,12 +7,13 @@
 // PATCHSPRITE_PEDAL_LOCK_TOKEN, which lets processes the holder starts use the device that the lock keeps everyone
 // else off. It is created whole and exclusively (a finished temp file hard-linked into place, which fails if the lock
 // exists), so two takers can't both win and a reader never sees it half written. A lock is stale, and taken over,
-// when it is older than six hours, when its process is gone, or when it isn't a lock at all. Removing a stale lock,
-// and releasing one's own, happen under a short guard file, so a taker can't delete a lock someone else has just
-// created.
+// when it is older than six hours, when it has gone unused for PEDAL_LOCK_IDLE_MS (its file's modification time is the
+// last use: the holder renews it with touchPedalLock while it works, never while it waits on a person), when its
+// process is gone, or when it isn't a lock at all. Removing a stale lock, and releasing one's own, happen under a
+// short guard file, so a taker can't delete a lock someone else has just created.
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { dataHome } from "./data-dir.ts";
 
@@ -31,10 +32,17 @@ export type PedalLockResult = { ok: true; lock: PedalLock } | { ok: false; holde
 
 /** A lock older than this is stale whatever its process. */
 export const PEDAL_LOCK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+/**
+ * A lock unused for this long is stale: nothing holds the device while waiting on a person's reply. Use is the lock
+ * file's modification time, which touchPedalLock moves on.
+ */
+export const PEDAL_LOCK_IDLE_MS = 15 * 60 * 1000;
+/** How often a working holder renews its lock; renewOwnPedalLock leaves a lock renewed more recently alone. */
+const RENEW_EVERY_MS = 60_000;
 /** A guard file older than this was left by a process that died holding it. */
 const GUARD_MAX_AGE_MS = 10_000;
 /** Owner names are cut to this length. */
-const OWNER_MAX = 200;
+export const OWNER_MAX = 200;
 
 /** The environment variable that carries a holder's token to the processes it starts. */
 export const PEDAL_LOCK_TOKEN_ENV = "PATCHSPRITE_PEDAL_LOCK_TOKEN";
@@ -71,8 +79,24 @@ function parse(text: string | undefined): PedalLock | undefined {
   }
 }
 
-function isLive(lock: PedalLock | undefined): lock is PedalLock {
-  return !!lock && Date.now() - Date.parse(lock.startedAt) < PEDAL_LOCK_MAX_AGE_MS && processAlive(lock.pid);
+/** usedAt: the lock file's modification time (ms); undefined (unreadable) counts as just used, so it never frees a lock */
+function isLive(lock: PedalLock | undefined, usedAt?: number): lock is PedalLock {
+  const now = Date.now();
+  return (
+    !!lock &&
+    now - Date.parse(lock.startedAt) < PEDAL_LOCK_MAX_AGE_MS &&
+    (usedAt === undefined || now - usedAt < PEDAL_LOCK_IDLE_MS) &&
+    processAlive(lock.pid)
+  );
+}
+
+/** The lock file's modification time (ms), or undefined when it can't be read. */
+function usedAt(path: string): number | undefined {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Windows sharing errors that pass: a file being deleted (EPERM), or held open by a virus scanner or indexer. */
@@ -154,8 +178,73 @@ export function samePedalLock(a: PedalLock | undefined, b: PedalLock): boolean {
 
 /** The live lock, or undefined when the pedal is free (no lock, or only a stale one). */
 export function readPedalLock(env: NodeJS.ProcessEnv = process.env, how: LockRead = {}): PedalLock | undefined {
-  const lock = parse(readText(pedalLockPath(env), how));
-  return isLive(lock) ? lock : undefined;
+  const path = pedalLockPath(env);
+  const lock = parse(readText(path, how));
+  return isLive(lock, usedAt(path)) ? lock : undefined;
+}
+
+/** Whether `env` carries the token whose hash `lock` holds (the holder and the processes it started). */
+function heldWith(lock: PedalLock, env: NodeJS.ProcessEnv): boolean {
+  const token = env[PEDAL_LOCK_TOKEN_ENV];
+  return !!lock.tokenHash && !!token && timingSafeEqual(Buffer.from(hashToken(token)), Buffer.from(lock.tokenHash));
+}
+
+/**
+ * Keeps `lock` in use while an unattended command runs (never one that waits on a person): touches it every minute.
+ * A missed renewal only lets the lock go idle sooner; the next one tries again. Once the lock is no longer `lock` (it
+ * went idle, say while the machine slept, and may have been taken over), it stops and calls `onLost`. The timer doesn't
+ * keep the process up.
+ */
+export function keepPedalLockInUse(
+  lock: PedalLock,
+  env: NodeJS.ProcessEnv = process.env,
+  onLost?: () => void,
+): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    let kept: boolean;
+    try {
+      kept = touchPedalLock(lock, env);
+    } catch {
+      return; // the guard couldn't be had: the next tick tries again
+    }
+    // no longer ours (gone idle while the machine slept, or taken over): say so once
+    if (!kept) {
+      clearInterval(timer);
+      onLost?.();
+    }
+  }, RENEW_EVERY_MS).unref();
+  return timer;
+}
+
+/**
+ * Marks `lock` as in use now, so it doesn't go idle (PEDAL_LOCK_IDLE_MS): call it while working, never while waiting
+ * on a person. Returns whether it did (false when the lock is no longer `lock`); throws if the guard can't be had.
+ */
+export function touchPedalLock(lock: PedalLock, env: NodeJS.ProcessEnv = process.env): boolean {
+  const path = pedalLockPath(env);
+  return withGuard(path, () => {
+    const seen = parse(readText(path));
+    if (!samePedalLock(seen, lock) || !isLive(seen, usedAt(path))) return false;
+    const now = new Date();
+    patiently(() => utimesSync(path, now, now));
+    return true;
+  });
+}
+
+/**
+ * Renews the lock when the process with `env` holds it (its token matches): the MCP server calls this each time it
+ * touches the pedal under its holder's lock, so a session that keeps using the pedal keeps it. Best effort: never throws.
+ */
+export function renewOwnPedalLock(env: NodeJS.ProcessEnv = process.env): void {
+  try {
+    // renewed within the last minute: nothing to do (and no guard to wait for on every call)
+    const used = usedAt(pedalLockPath(env));
+    if (used !== undefined && Date.now() - used < RENEW_EVERY_MS && Date.now() >= used) return;
+    const lock = readPedalLock(env);
+    if (lock && heldWith(lock, env)) touchPedalLock(lock, env);
+  } catch {
+    // a missed renewal only lets the lock go idle sooner
+  }
 }
 
 /**
@@ -165,9 +254,7 @@ export function readPedalLock(env: NodeJS.ProcessEnv = process.env, how: LockRea
 export function foreignPedalLock(env: NodeJS.ProcessEnv = process.env, how: LockRead = {}): PedalLock | undefined {
   const lock = readPedalLock(env, how);
   if (!lock) return undefined;
-  const token = env[PEDAL_LOCK_TOKEN_ENV];
-  if (lock.tokenHash && token && timingSafeEqual(Buffer.from(hashToken(token)), Buffer.from(lock.tokenHash))) return undefined;
-  return lock;
+  return heldWith(lock, env) ? undefined : lock;
 }
 
 /**
@@ -195,7 +282,7 @@ export function acquirePedalLock(owner: string, opts: { env?: NodeJS.ProcessEnv;
         continue;
       }
       const holder = parse(seen);
-      if (isLive(holder)) return { ok: false, holder };
+      if (isLive(holder, usedAt(path))) return { ok: false, holder };
       // stale: remove it, but only if it is still the very lock judged stale
       removeUnless(path, (text) => text !== seen);
     }
@@ -223,7 +310,7 @@ export function stopPedalLock(owner: string, env: NodeJS.ProcessEnv = process.en
   const seen = readText(path);
   if (seen === undefined) return { ok: true };
   const lock = parse(seen);
-  if (isLive(lock) && lock.owner !== owner.slice(0, OWNER_MAX)) return { ok: false, holder: lock };
+  if (isLive(lock, usedAt(path)) && lock.owner !== owner.slice(0, OWNER_MAX)) return { ok: false, holder: lock };
   if (!removeUnless(path, (text) => text !== undefined && text !== seen)) throw new Error("The pedal lock changed meanwhile; try again.");
   return { ok: true };
 }

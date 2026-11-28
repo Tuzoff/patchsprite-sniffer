@@ -101,7 +101,7 @@ map-check record about the same entry use the same name.
 | `setting/<id>` | a global setting | `/settings/items/*` |
 | `linked/<group>/<set>` | a set of paired parameters in a parameter group | `/parameters/groups/<group>/linked/<set>` |
 | `measured/<field>` | a measured value, by its dotted path (`measured/transport.timing.compareToggle`), inside one of the known sections in the next row | the field's own path (`/transport/timing/compareToggle`) |
-| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor`, `modes` | that whole section | `/<section>` |
+| `transport`, `host`, `identity`, `driver`, `session`, `hazards`, `scratch`, `audio`, `display`, `parameters`, `controls`, `settings`, `eq`, `addresses`, `editor`, `modes`, `cautions` | that whole section | `/<section>` |
 | `safety`, `blocked` | that whole section | `/<section>`, `/firmwares/<fw>/<section>` |
 | `<key>`, any other top-level key | that whole section, such as a draft's own `addressMap` | `/<key>` |
 
@@ -132,9 +132,8 @@ reads it (map-checks.md, "Fingerprints"); it is not merged into the base one.
 
 ## Modes
 
-A map with `modes` keeps some entries apart per mode (closed-repo map checks, draft PR 93). A change says which mode
-the unit was in when its evidence was seen (`mode`), and when a patch is applied that mode is checked against the map
-as the reviewer saw it:
+A map with `modes` keeps some entries apart per mode. A change says which mode the unit was in when its evidence was
+seen (`mode`), and when a patch is applied that mode is checked against the map as the reviewer saw it:
 
 - an `@<mode>` entry needs a change seen in that mode, and a mode the map uses; it only marks, because an edit would
   change the message every mode shares on one mode's evidence. A fix goes to the message itself, or to the mode's
@@ -273,13 +272,24 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   the patch was made against another map), since then what it takes out isn't known;
 - `safety`, `blocked` or `hazards`;
 - anything that may lift a block. A block is per message: the app lets a send share a blocked message's cmd only while
-  their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout) tell them apart. So a change to
-  the `cmd`, `dir` or `payload` of a blocked message, or of a send or request whose cmd can be a blocked one's
-  (placeholders match any byte), or to a layout such a payload names, or to what a mode stands in for any of these,
-  is reviewed. That includes a firmware delta of one. Since a reviewer may accept any subset of the changes, a message
-  counts with every cmd, direction and payload it has in the base map or in the map the whole patch leaves, so moving
-  a send onto a blocked cmd counts even when another change moves the block off it, and so does blocking a message
-  whose payload another change edits;
+  their payload pins (`const`, `not`, `size`, `minSize`, `maxSize`, a named layout, a packed tail's layout) and their
+  `header` tell them apart. So a change to the `cmd`, `dir`, `payload` or `header` of a blocked message, or of a send
+  or request whose cmd can be a blocked one's (placeholders match any byte), or to a layout such a payload names, or
+  to the layout its packed tail is read with (`packed.layout` or `packed.pieces.layout`, in the named layout or the
+  inline payload), or to what a mode stands in for any of these, is reviewed. That includes a firmware delta of one.
+  Since a reviewer may accept any subset of the changes, a message counts with every cmd, direction and payload it has
+  in the base map or in the map the whole patch leaves, so moving a send onto a blocked cmd counts even when another
+  change moves the block off it, and so does blocking a message whose payload another change edits. A caller may pass an optional function that gives a map's block separations
+  (`reviewReasons(patch, map, { separations })`, each a send, the blocked message it shares a cmd with and what keeps
+  them apart, with the firmware and the mode it holds in where the caller names them; a pair a firmware or mode
+  doesn't name holds as without it, and one a firmware doesn't name in a mode holds as that firmware's pair where it
+  names one, else as the base map's in that mode). The reason then names each pair the change touches and how its separation changes from the base map
+  to the map that change alone leaves (or the whole patch, for a change that doesn't apply alone): a send that now
+  shares a blocked cmd ("kept apart only by byte 4: 08 vs 01"), a separation that moves, one that is gone, or one that
+  still holds. Without them, when the base map, that map or the whole patch's map doesn't load, or past the first 64
+  changes that may lift a block, the reason is the plain one. Other subsets of three or more changes aren't weighed,
+  so a note is a guide for the reviewer, never a sign that the pair stays apart: the prefix still asks for review, and
+  the map checks run again when the accepted map loads;
 - what may be written: `allowed`, `writable`, `min`, `max`, `saturate`, `readOnly`, and `linked` sets, whose rules
   limit the values written together. A parameter's `default` isn't on this list: the map checks it at load against
   those limits, and it only says where a reset lands;
@@ -289,13 +299,17 @@ firmware delta covers, so dropping a limit by replacing its parent, or by a delt
   only when both what it puts in and what it takes out are measured values (`{value, unit, measuredOn, date, source}`);
 - any top-level section this engine doesn't know, since its risks can't be judged;
 - `/session`, which is sent every time a port opens;
+- `/identity`, which decides which unit the map drives at all: any change to it, its `source` included;
+- `/driver`, which picks the code that runs the unit: any change to it;
+- `/host`, which says which MIDI port, USB unit and vendor apps the map looks for: any change to it, but for a
+  `measured/...` change exempt as in the framing;
 - `/modes`, which decides which entries each mode reads and writes through;
 - a control's target: anything under `/controls` above an item, or an item's `type`, `cc`, `pc`, `nrpn`, `number`,
   `msb`, `lsb`, `channel` or `bits`, since a changed number retargets every write through it;
 - anything new that writes to the unit: a value that makes a message's `dir` `send` where it wasn't, or a new
   control;
-- text a model reads: `agentNotes`, which reaches the player's chat model, and `safety.notes`, which the sniffer's walk
-  prints for the model driving the vendor editor.
+- text a model reads: `agentNotes` and `/cautions` (shown in the unit's status), which reach the player's chat model,
+  and `safety.notes`, which the sniffer's walk prints for the model driving the vendor editor.
 
 Away from a blocked cmd, a repair of the bytes a known send writes (its `cmd`, a layout's offsets, an enum's values)
 isn't on this list on purpose: fixing those is what a seed patch is for. It reaches other players the way any unit's

@@ -1,0 +1,58 @@
+name: gate-approval
+
+# The `gate-approval` commit status (scripts/gate-approval.ts): a pull request that changes how pull requests are
+# checked or merged needs a maintainer's `gate-approved` label, or the reviewer's `ai-gate-approved` where it may stand
+# in, added after its last push. Every other pull request passes at once. It replaces a required approving review, as
+# in the Patchsprite app: the spec-review labels, the checklist and the tests stand for every pull request, and this
+# check adds a maintainer's word for gate changes.
+#
+# Main's copy decides: pull_request_target runs this file as it is on the base branch, and it checks out only the base
+# branch's script, never the pull request's code, so a pull request can't loosen the check it is judged by, and a fork's
+# can't reach this job's token. It reads the pull request through the API and posts a commit status rather than a
+# check, so a check of the same name from a branch's own workflow can't pass the rule alone (both must pass). The pull
+# request that adds this file gets no run, since its base has none.
+# The run's name ties it to its pull request: the script dates a push by this pull request's own latest streak of runs
+# on the head, never another pull request's run for the same commit. Main's copy sets it, so a pull request can't.
+run-name: "gate-approval #${{ github.event.pull_request.number }}"
+
+on:
+  pull_request_target:
+    # edited: a new base branch changes the pull request's files
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited, ready_for_review]
+    # only pull requests into main: a status belongs to a commit, so one into another branch could flip main's verdict
+    # (a change of base branch to main is an `edited` event of the new base, which runs)
+    branches: [main]
+
+# No secrets: this public repo's CI never gets any, and none may ever be added (see README).
+permissions:
+  actions: read # this workflow's runs, which date a push
+  contents: read
+  issues: read # the label events
+  pull-requests: read # the files and labels
+  statuses: write # the gate-approval status
+
+concurrency:
+  group: gate-approval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate-approval-decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: scripts/gate-approval.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      - name: Gate changes are approved
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/gate-approval.ts

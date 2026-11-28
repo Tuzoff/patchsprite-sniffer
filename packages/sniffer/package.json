@@ -1,0 +1,25 @@
+{
+  "name": "@patchsprite/sniffer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    "./walk/shot": "./src/walk/shot.ts",
+    "./walk/host": "./src/walk/host.ts"
+  },
+  "bin": {
+    "patchsprite-sniff": "./bin/sniff.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@patchsprite/engine": "0.1.0",
+    "zod": "4.6.7"
+  },
+  "optionalDependencies": {
+    "frida": "17.26.3"
+  }
+}
